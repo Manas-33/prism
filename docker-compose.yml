@@ -5,18 +5,26 @@ services:
     command: uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
+    volumes:
+      - /Users/dalvi/Downloads/Projects/prism.pem:/run/secrets/github_app_key.pem
     env_file:
       - .env
     depends_on:
       - redis
+    environment:
+      - GITHUB_PRIVATE_KEY_PATH=/run/secrets/github_app_key.pem
 
   worker:
     build: .
     command: uv run celery -A worker.tasks worker --loglevel=info
+    volumes:
+      - /Users/dalvi/Downloads/Projects/prism.pem:/run/secrets/github_app_key.pem
     env_file:
       - .env
     depends_on:
       - redis
+    environment:
+      - GITHUB_PRIVATE_KEY_PATH=/run/secrets/github_app_key.pem
   redis:
     image: "redis:7"
     ports:

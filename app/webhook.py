@@ -25,7 +25,7 @@ async def handle_webhook(request: Request):
     signature  = request.headers.get("X-Hub-Signature-256")
     delivery_id = request.headers.get("X-GitHub-Delivery")
     event = request.headers.get("X-GitHub-Event")
-    logger.info("Webhook received", extra={"repo":repo, "delivery_id": delivery_id, "action":data.get("action")})
+    logger.info("Webhook received", extra={"delivery_id": delivery_id})
     if not signature or not verify_signature(payload,signature):
         logger.warning("Invalid signature", extra={"delivery_id": delivery_id})
         raise HTTPException(status_code=403,detail="Invalid Signature")
