@@ -1,8 +1,10 @@
 from celery import Celery
 from app.github import post_pr_comment
 from dotenv import load_dotenv
+import logging
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 celery = Celery(
     "worker",
@@ -10,7 +12,7 @@ celery = Celery(
 )
 @celery.task
 def analyze_pr(repo: str, pr_number: int):
-    print(f"[WORKER] Analyzing PR {repo}#{pr_number}")
+    logger.info("Analyzing PR", extra={"repo": repo, "pr": pr_number})
     post_pr_comment(
         repo,
         pr_number,
