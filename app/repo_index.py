@@ -1,22 +1,7 @@
-from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict
 from app.static_analysis import parse_code, extract_symbols, extract_imports
+from app.models import Symbol, FileIndex
 import os 
-
-@dataclass
-class Symbol:
-    name: str
-    kind: str
-    file: str
-    start: int
-    end: int
-
-@dataclass
-class FileIndex:
-    path: str
-    imports: List[str]
-    symbols: List[Symbol]
-    
 
 def index_file(repo_dir: str, file_path: str) -> FileIndex:
     full_path = os.path.join(repo_dir, file_path)

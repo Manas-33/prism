@@ -1,6 +1,6 @@
 from collections import defaultdict
 from typing import Dict, List, Set
-from app.repo_index import FileIndex
+from app.models import FileIndex
 from app.static_analysis import parse_code, walk
 import os 
 
