@@ -20,16 +20,16 @@ def extract_symbols(tree):
             name_node = node.child_by_field_name("name")
             functions.append({
                 "name": name_node.text.decode(),
-                "start_line": node.start_point[0],
-                "end_line": node.end_point[0],
+                "start_line": node.start_point[0]+1,
+                "end_line": node.end_point[0]+1,
             })
 
         elif node.type == "class_definition":
             name_node = node.child_by_field_name("name")
             classes.append({
                 "name": name_node.text.decode(),
-                "start_line": node.start_point[0],
-                "end_line": node.end_point[0],
+                "start_line": node.start_point[0]+1,
+                "end_line": node.end_point[0]+1,
             })
 
     return {
@@ -57,26 +57,24 @@ def changed_files_from_diff(diff: str):
     return list(files)
 
 def changed_lines_from_diff(diff: str):
-    changed_lines = set()
-    current_line = None
+    changed = set()
+    current = None
 
     for line in diff.splitlines():
         if line.startswith("@@"):
             # @@ -a,b +c,d @@
-            plus = line.split("+")[1].split(" ")[0]
-            start = int(plus.split(",")[0])
-            current_line = start
+            hunk = line.split("+")[1].split(" ")[0]
+            current = int(hunk.split(",")[0])
 
         elif line.startswith("+") and not line.startswith("+++"):
-            if current_line is not None:
-                changed_lines.add(current_line)
-                current_line += 1
+            if current is not None:
+                changed.add(current)
+                current += 1
 
-        elif not line.startswith("-"):
-            if current_line is not None:
-                current_line += 1
+        elif line.startswith(" ") and current is not None:
+            current += 1
 
-    return changed_lines
+    return changed
 
 def find_changed_symbols(symbols, changed_lines):
     changed = []

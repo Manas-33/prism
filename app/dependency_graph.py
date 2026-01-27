@@ -4,6 +4,9 @@ from app.repo_index import FileIndex
 from app.static_analysis import parse_code, walk
 import os 
 
+def symbol_id(sym):
+    return f"{sym.file}:{sym.kind}:{sym.name}"
+
 def resolve_import_to_file(import_stmt: str) -> str | None:
     if import_stmt.startswith("from "):
         module = import_stmt.split(" ")[1]
@@ -39,7 +42,7 @@ def build_symbol_graph(repo_index,repo_dir):
     symbol_lookup = {}
     for fi in repo_index.values():
         for sym in fi.symbols:
-            symbol_lookup[sym.name] = sym
+            symbol_lookup[sym.name] = symbol_id(sym)
 
     for fi in repo_index.values():
         
@@ -62,7 +65,8 @@ def find_impacted_files(changed_symbols, symbol_graph):
     changed_names = {name for _, name in changed_symbols}
     for caller_file, called_symbols in symbol_graph.items():
         for sym in called_symbols:
-            if sym.name in changed_names:
+            _, _, name = sym.split(":")
+            if name in changed_names:
                 impacted.add(caller_file)
     return impacted
 
