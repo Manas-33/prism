@@ -45,14 +45,9 @@ async def handle_webhook(request: Request):
     
     data = await request.json()
     
-    # only handle when PR is opened
-    if data.get("action") != "opened":
-        logger.info("Non-opened action ignored", extra={"action": data.get("action")})
-        return {"status": "ignored"}
-    
     repo = data["repository"]["full_name"]
     
-    ALLOWED_ACTIONS = ["opened", "synchronize"]
+    ALLOWED_ACTIONS = ["opened", "synchronize", "reopened"]
     
     action = data.get("action")
     pr = data["pull_request"]

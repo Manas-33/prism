@@ -9,6 +9,12 @@ from app.static_analysis import (
     extract_imports,
     find_changed_symbols,
 )
+from app.dependency_graph import (
+    build_file_graph,
+    build_symbol_graph,
+    find_impacted_files,
+)
+from app.repo_index import build_repo_index
 
 GITHUB_API = "https://api.github.com"
 
@@ -67,6 +73,10 @@ def clone_and_analyze_pr(repo:str, pr_number:int, workspace:str) -> str:
     changed_files = changed_files_from_diff(diff)
     changed_lines = changed_lines_from_diff(diff)
 
+    repo_index = build_repo_index(repo_dir)
+    file_graph = build_file_graph(repo_index)
+    symbol_graph = build_symbol_graph(repo_index,repo_dir)
+
     changed_symbols = []
 
     for file in changed_files:
@@ -85,12 +95,20 @@ def clone_and_analyze_pr(repo:str, pr_number:int, workspace:str) -> str:
 
         hits = find_changed_symbols(symbols, changed_lines)
         changed_symbols.extend(hits)
-
+        
+    impacted_files = find_impacted_files(
+        changed_symbols,
+        symbol_graph,
+    )
     summary = summarize_diff(diff)
 
     if changed_symbols:
         summary += "\nChanged symbols:\n"
         for kind, name in set(changed_symbols):
             summary += f"- {kind}: {name}\n"
-
+            
+    if impacted_files:
+        summary += "\nImpacted files:\n"
+        for f in impacted_files:
+            summary += f"- {f}\n"
     return summary
