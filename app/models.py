@@ -50,8 +50,14 @@ def deserialize_repo_index(data: dict) -> FileIndex:
     return index
 
 def serialize_symbol_graph(symbol_graph):
-    return {k: list(v) for k, v in symbol_graph.items()}
+    return {
+        file: dict(callees)
+        for file, callees in symbol_graph.items()
+    }
 
 def deserialize_symbol_graph(data):
-    return {k: set(v) for k, v in data.items()}
+    return {
+        file: dict(callees)
+        for file, callees in data.items()
+    }
 

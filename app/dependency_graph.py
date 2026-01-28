@@ -3,6 +3,7 @@ from typing import Dict, List, Set
 from app.models import FileIndex
 from app.static_analysis import parse_code, walk
 import os 
+from app.confidence import compute_confidence, confidence_label
 
 def symbol_id(sym):
     return f"{sym.file}:{sym.kind}:{sym.name}"
@@ -37,7 +38,7 @@ def extract_function_calls(tree):
     return calls
 
 def build_symbol_graph(repo_index,repo_dir):
-    symbol_graph = defaultdict(set)
+    symbol_graph = defaultdict(lambda: defaultdict(int))
 
     symbol_lookup = {}
     for fi in repo_index.values():
@@ -53,21 +54,41 @@ def build_symbol_graph(repo_index,repo_dir):
         tree = parse_code(code)
         calls = extract_function_calls(tree)
         print("CALLS IN", fi.path, "→", calls)
+        
         for call in calls:
             name = call.split(".")[-1]
             if name in symbol_lookup:
-                symbol_graph[fi.path].add(symbol_lookup[name])
+                sid = symbol_lookup[name]
+                symbol_graph[fi.path][sid] += 1
 
     return symbol_graph
 
-def find_impacted_files(changed_symbols, symbol_graph):
-    impacted = set()
+# def find_impacted_files(changed_symbols, symbol_graph):
+#     impacted = set()
+#     changed_names = {name for _, name in changed_symbols}
+#     for caller_file, called_symbols in symbol_graph.items():
+#         for sym in called_symbols:
+#             _, _, name = sym.split(":")
+#             if name in changed_names:
+#                 impacted.add(caller_file)
+#     return impacted
+
+def find_impacts_with_confidence(changed_symbols, symbol_graph):
+    
     changed_names = {name for _, name in changed_symbols}
-    for caller_file, called_symbols in symbol_graph.items():
-        for sym in called_symbols:
-            _, _, name = sym.split(":")
+    impacts = []
+    
+    for file_path, callees in symbol_graph.items():
+        for sid, count in callees.items():
+            _, _, name = sid.split(":")
             if name in changed_names:
-                impacted.add(caller_file)
-    return impacted
-
-
+                score = compute_confidence(file_path, name, count)
+                label = confidence_label(score)
+                impacts.append({
+                    "file": file_path,
+                    "symbol": name,
+                    "call_count": count,
+                    "score": score,
+                    "label": label,
+                })
+    return impacts

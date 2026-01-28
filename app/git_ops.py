@@ -12,7 +12,7 @@ from app.static_analysis import (
 from app.dependency_graph import (
     build_file_graph,
     build_symbol_graph,
-    find_impacted_files,
+    find_impacts_with_confidence,
 )
 from app.repo_index import build_repo_index
 from app.cache import cache_get, cache_set
@@ -119,7 +119,7 @@ def clone_and_analyze_pr(repo:str, pr_number:int, workspace:str) -> str:
         changed_symbols.extend(hits)
     
     # Find impacted files
-    impacted_files = find_impacted_files(
+    impacted_files = find_impacts_with_confidence(
         changed_symbols,
         symbol_graph,
     )
@@ -132,6 +132,10 @@ def clone_and_analyze_pr(repo:str, pr_number:int, workspace:str) -> str:
             
     if impacted_files:
         summary += "\nImpacted files:\n"
-        for f in impacted_files:
-            summary += f"- {f}\n"
+        for r in impacted_files:
+            summary += (
+                f"- {r['file']} "
+                f"(symbol: {r['symbol']}, "
+                f"confidence: {r['label']})\n"
+            )
     return summary
