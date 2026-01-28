@@ -1,7 +1,7 @@
 from collections import defaultdict
 from typing import Dict, List, Set
 from app.models import FileIndex
-from app.static_analysis import parse_code, walk
+from app.static_analysis import parse_code, walk, resolve_import
 import os 
 from app.confidence import compute_confidence, confidence_label
 
@@ -17,13 +17,19 @@ def resolve_import_to_file(import_stmt: str) -> str | None:
         return None
     return module.replace(".", "/") + ".py"
 
-def build_file_graph(repo_index: Dict[str, FileIndex]):
+def build_file_graph(repo_dir, repo_index):
+    module_root = detect_module_root(repo_dir)
     graph = defaultdict(set)
-    for file_path, file_index in repo_index.items():
-        for import_stmt in file_index.imports:
-            imported_file = resolve_import_to_file(import_stmt)
-            if imported_file and imported_file in repo_index:
-                graph[file_path].add(imported_file)
+    for file_path, fi in repo_index.items():
+        for imp in fi.imports:
+            target = resolve_import(
+                import_stmt=imp,
+                current_file=file_path,
+                module_root=module_root,
+            )
+            if target:
+                graph[file_path].add(target)
+
     return graph
 
 def extract_function_calls(tree):
@@ -92,3 +98,9 @@ def find_impacts_with_confidence(changed_symbols, symbol_graph):
                     "label": label,
                 })
     return impacts
+
+def detect_module_root(repo_dir):
+    src = os.path.join(repo_dir, "src")
+    if os.path.exists(src):
+        return src
+    return repo_dir

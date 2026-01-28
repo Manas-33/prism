@@ -90,7 +90,7 @@ def clone_and_analyze_pr(repo:str, pr_number:int, workspace:str) -> str:
     else:   
         # Build indexes and graphs
         repo_index = build_repo_index(repo_dir)
-        file_graph = build_file_graph(repo_index)
+        file_graph = build_file_graph(repo_dir,repo_index)
         symbol_graph = build_symbol_graph(repo_index,repo_dir)
         logger.info("Cache miss - computed index and graphs", extra={"commit": commit_sha})
         cache_set(cache_key, {
