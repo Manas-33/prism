@@ -2,7 +2,7 @@ from collections import defaultdict
 from typing import Dict, List, Set
 from app.models import FileIndex
 from app.static_analysis import parse_code, walk, resolve_import
-import os 
+import os, subprocess
 from app.confidence import compute_confidence, confidence_label
 from app.llm_service import explain_impact
 
@@ -183,6 +183,7 @@ def find_impacts_with_confidence_and_context(
     symbol_graph,
     repo_dir,
     repo_index,
+    base_sha,
 ):
     changed_names = {name for _, name in changed_symbols}
     impacts = []
@@ -202,7 +203,6 @@ def find_impacts_with_confidence_and_context(
 
             abs_impacted = os.path.join(repo_dir, file_path)
 
-            # ✅ AST-backed call site (use first call)
             call_site_line = lines[0]
             call_site_code = extract_call_site_snippet(
                 abs_impacted,
@@ -210,7 +210,6 @@ def find_impacts_with_confidence_and_context(
                 CALL_SNIPPET_WINDOW,
             )
 
-            # Extract changed function body (after)
             after_code = ""
             before_code = ""
 
@@ -220,6 +219,16 @@ def find_impacts_with_confidence_and_context(
                         abs_def_path = os.path.join(repo_dir, fi_path)
                         after_code = extract_code_snippet(
                             abs_def_path,
+                            sym.start,
+                            sym.end,
+                        )
+                        base_text = git_show_file(
+                            repo_dir,
+                            base_sha,
+                            fi_path,
+                        )
+                        before_code = extract_code_snippet_from_text(
+                            base_text,
                             sym.start,
                             sym.end,
                         )
@@ -242,37 +251,32 @@ def find_impacts_with_confidence_and_context(
     impacts.sort(key=lambda x: x["score"], reverse=True)
     return impacts
 
-def explain_impacts_and_attach(impacts: List[dict], repo_dir: str):
-    """
-    For each impact with a MEDIUM/HIGH label, call the LLM explain_impact and attach explanation.
-    Mutates impacts to add 'explanation' when present.
-    """
-    for impact in impacts:
-        if impact["label"] not in ("MEDIUM", "HIGH"):
-            impact["explanation"] = None
-            continue
+def git_show_file(repo_dir:str, commit_sha:str, file_path:str) -> str:
+    result = subprocess.run(
+        ["git", "show", f"{commit_sha}:{file_path}"],
+        cwd=repo_dir,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return ""
+    return result.stdout
+    
 
-        # minimal safety check: need after_code and call_site_code to produce a meaningful prompt
-        if not impact["after_code"] or not impact["call_site_code"]:
-            impact["explanation"] = None
-            continue
+def extract_code_snippet_from_text(
+    text: str,
+    start_line: int,
+    end_line: int,
+) -> str:
+    if not text:
+        return ""
 
-        explanation = explain_impact(
-            changed_symbol=impact["symbol"],
-            before_code=impact.get("before_code", ""),
-            after_code=impact["after_code"],
-            impacted_file=impact["file"],
-            call_site_code=impact["call_site_code"],
-        )
+    lines = text.splitlines()
+    start = max(1, start_line)
+    end = min(len(lines), end_line)
 
-        # final guard: ensure the explanation mentions the symbol name (very cheap sanity check)
-        if impact["symbol"] not in explanation:
-            # you could still accept the explanation but it's suspicious — you may drop it
-            # here we attach but mark low trust
-            impact["explanation"] = explanation
-            impact["explanation_trust"] = "suspect"
-        else:
-            impact["explanation"] = explanation
-            impact["explanation_trust"] = "trusted"
+    if start > end:
+        return ""
 
-    return impacts
+    return "\n".join(lines[start - 1 : end])

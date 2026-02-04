@@ -115,6 +115,7 @@ def clone_and_analyze_pr(repo: str, pr_number: int, workspace: str) -> str:
         symbol_graph=symbol_graph,
         repo_dir=repo_dir,
         repo_index=repo_index,
+        base_sha=base_sha,
     )
 
     # ---- Phase 5: LLM explanations (GATED) ----

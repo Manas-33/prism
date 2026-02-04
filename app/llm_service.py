@@ -20,30 +20,32 @@ def explain_impact(
         "- be concise (3–5 sentences max)\n"
     )
 
-    user_prompt = f"""
-    A function named `{changed_symbol}` has changed in a pull request.
+    user_prompt = f"""A function named `{changed_symbol}` has changed in a pull request.
 
-    Changed function BEFORE:
-    ```python
-    {before_code}
-    Changed function AFTER:
+Changed function BEFORE:
+```python
+{before_code}
+```
 
-    {after_code}
-    This function is called in the following file:
-    {impacted_file}
-    
-    Call site:
-    {call_site_code}
-    
-    Explain:
+Changed function AFTER:
+```python
+{after_code}
+```
+This function is called in the following file:
+`{impacted_file}`
 
-    why this change might affect {impacted_file}
+Call site:
+```python
+{call_site_code}
+```
 
-    what the developer should double-check
+Explain:
 
-    do NOT assume this is a bug unless it clearly is
-    """
-    
+why this change might affect `{impacted_file}`
+
+what the developer should double-check
+
+do NOT assume this is a bug unless it clearly is"""
     response = generate(
     system_prompt=system_prompt,
     user_prompt=user_prompt,
