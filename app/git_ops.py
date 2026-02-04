@@ -12,8 +12,9 @@ from app.static_analysis import (
 from app.dependency_graph import (
     build_file_graph,
     build_symbol_graph,
-    find_impacts_with_confidence,
+    find_impacts_with_confidence_and_context,
 )
+from app.llm_service import explain_impact
 from app.repo_index import build_repo_index
 from app.cache import cache_get, cache_set
 from app.models import serialize_repo_index, deserialize_repo_index, serialize_symbol_graph, deserialize_symbol_graph
@@ -63,79 +64,90 @@ def summarize_diff(diff:str) -> str:
         f"Lines removed: {removed}\n"
     )
     
-def clone_and_analyze_pr(repo:str, pr_number:int, workspace:str) -> str:
-    # Get Token and PR info
+def clone_and_analyze_pr(repo: str, pr_number: int, workspace: str) -> str:
     token = get_github_token(repo)
     pr = get_pr_info(repo, pr_number)
-    
+
     base_sha = pr["base"]["sha"]
-    repo_dir = os.path.join(workspace, "repo")
     commit_sha = pr["head"]["sha"]
+    repo_dir = os.path.join(workspace, "repo")
     cache_key = f"{repo}:{commit_sha}"
-    
-    # Clone and checkout PR branch
+
+    # ---- Phase 2: Clone + diff ----
     clone_repo(repo, token, repo_dir)
     checkout_pr_branch(repo_dir, pr["head"]["ref"])
-    
-    # Compute diff
+
     diff = compute_diff_stats(repo_dir, base_sha)
     changed_files = changed_files_from_diff(diff)
     changed_lines = changed_lines_from_diff(diff)
-    
+
+    # ---- Phase 4: Load or build graph ----
     cached = cache_get(cache_key)
     if cached:
         repo_index = deserialize_repo_index(cached["repo_index"])
         symbol_graph = deserialize_symbol_graph(cached["symbol_graph"])
         logger.info("Cache hit", extra={"commit": commit_sha})
-    else:   
-        # Build indexes and graphs
+    else:
         repo_index = build_repo_index(repo_dir)
-        file_graph = build_file_graph(repo_dir,repo_index)
-        symbol_graph = build_symbol_graph(repo_index,repo_dir)
-        logger.info("Cache miss - computed index and graphs", extra={"commit": commit_sha})
+        symbol_graph = build_symbol_graph(repo_dir, repo_index)
         cache_set(cache_key, {
             "repo_index": serialize_repo_index(repo_index),
             "symbol_graph": serialize_symbol_graph(symbol_graph),
         })
+        logger.info("Cache miss", extra={"commit": commit_sha})
 
-    # Analyze changes for impacted symbols and files
+    # ---- Phase 3: Detect changed symbols ----
     changed_symbols = []
-
     for file in changed_files:
         if not file.endswith(".py"):
             continue
-
         path = os.path.join(repo_dir, file)
         if not os.path.exists(path):
             continue
 
-        code = open(path).read()
-        tree = parse_code(code)
-
+        tree = parse_code(open(path).read())
         symbols = extract_symbols(tree)
-        imports = extract_imports(tree)
+        changed_symbols.extend(find_changed_symbols(symbols, changed_lines))
 
-        hits = find_changed_symbols(symbols, changed_lines)
-        changed_symbols.extend(hits)
-    
-    # Find impacted files
-    impacted_files = find_impacts_with_confidence(
-        changed_symbols,
-        symbol_graph,
+    # ---- Phase 4.5: Impact + confidence + call locations ----
+    impacts = find_impacts_with_confidence_and_context(
+        changed_symbols=changed_symbols,
+        symbol_graph=symbol_graph,
+        repo_dir=repo_dir,
+        repo_index=repo_index,
     )
+
+    # ---- Phase 5: LLM explanations (GATED) ----
+    for impact in impacts:
+        # if impact["label"] not in {"MEDIUM", "HIGH"}:
+        #     impact["explanation"] = None
+        #     continue
+
+        explanation = explain_impact(
+            changed_symbol=impact["symbol"],
+            before_code=impact["before_code"],
+            after_code=impact["after_code"],
+            impacted_file=impact["file"],
+            call_site_code=impact["call_site_code"],
+        )
+        impact["explanation"] = explanation
+
+    # ---- Rendering ----
     summary = summarize_diff(diff)
-    # Add detailed changed symbols and impacted files
+
     if changed_symbols:
         summary += "\nChanged symbols:\n"
         for kind, name in set(changed_symbols):
             summary += f"- {kind}: {name}\n"
-            
-    if impacted_files:
+
+    if impacts:
         summary += "\nImpacted files:\n"
-        for r in impacted_files:
+        for r in impacts:
             summary += (
                 f"- {r['file']} "
-                f"(symbol: {r['symbol']}, "
-                f"confidence: {r['label']})\n"
+                f"(symbol: {r['symbol']}, confidence: {r['label']})\n"
             )
+            if r.get("explanation"):
+                summary += f"  ↳ {r['explanation']}\n"
+
     return summary
