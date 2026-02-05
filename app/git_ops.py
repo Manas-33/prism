@@ -18,6 +18,8 @@ from app.llm_service import explain_impact
 from app.repo_index import build_repo_index
 from app.cache import cache_get, cache_set
 from app.models import serialize_repo_index, deserialize_repo_index, serialize_symbol_graph, deserialize_symbol_graph
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import logging
 logger = logging.getLogger(__name__)
 
@@ -65,15 +67,22 @@ def summarize_diff(diff:str) -> str:
     )
     
 def clone_and_analyze_pr(repo: str, pr_number: int, workspace: str) -> str:
-    token = get_github_token(repo)
     pr = get_pr_info(repo, pr_number)
-
-    base_sha = pr["base"]["sha"]
     commit_sha = pr["head"]["sha"]
+    summary_cache_key = f"summary:{repo}:{commit_sha}"
+    
+    cached_summary = cache_get(summary_cache_key)
+    if cached_summary:
+        logger.info("Returning cached summary", extra={"commit": commit_sha})
+        return cached_summary
+
+    token = get_github_token(repo)
+    base_sha = pr["base"]["sha"]
     repo_dir = os.path.join(workspace, "repo")
-    cache_key = f"{repo}:{commit_sha}"
+    graph_cache_key = f"graph:{repo}:{commit_sha}"
 
     # ---- Phase 2: Clone + diff ----
+    # We only clone if we missed the summary cache
     clone_repo(repo, token, repo_dir)
     checkout_pr_branch(repo_dir, pr["head"]["ref"])
 
@@ -82,34 +91,32 @@ def clone_and_analyze_pr(repo: str, pr_number: int, workspace: str) -> str:
     changed_lines = changed_lines_from_diff(diff)
 
     # ---- Phase 4: Load or build graph ----
-    cached = cache_get(cache_key)
-    if cached:
-        repo_index = deserialize_repo_index(cached["repo_index"])
-        symbol_graph = deserialize_symbol_graph(cached["symbol_graph"])
-        logger.info("Cache hit", extra={"commit": commit_sha})
+    cached_graph = cache_get(graph_cache_key)
+    if cached_graph:
+        repo_index = deserialize_repo_index(cached_graph["repo_index"])
+        symbol_graph = deserialize_symbol_graph(cached_graph["symbol_graph"])
+        logger.info("Graph cache hit")
     else:
         repo_index = build_repo_index(repo_dir)
         symbol_graph = build_symbol_graph(repo_dir, repo_index)
-        cache_set(cache_key, {
+        cache_set(graph_cache_key, {
             "repo_index": serialize_repo_index(repo_index),
             "symbol_graph": serialize_symbol_graph(symbol_graph),
         })
-        logger.info("Cache miss", extra={"commit": commit_sha})
+        logger.info("Graph cache miss - Built new graph")
 
     # ---- Phase 3: Detect changed symbols ----
     changed_symbols = []
     for file in changed_files:
-        if not file.endswith(".py"):
-            continue
+        if not file.endswith(".py"): continue
         path = os.path.join(repo_dir, file)
-        if not os.path.exists(path):
-            continue
+        if not os.path.exists(path): continue
 
         tree = parse_code(open(path).read())
         symbols = extract_symbols(tree)
         changed_symbols.extend(find_changed_symbols(symbols, changed_lines))
 
-    # ---- Phase 4.5: Impact + confidence + call locations ----
+    # ---- Phase 4.5: Impact + confidence ----
     impacts = find_impacts_with_confidence_and_context(
         changed_symbols=changed_symbols,
         symbol_graph=symbol_graph,
@@ -118,12 +125,9 @@ def clone_and_analyze_pr(repo: str, pr_number: int, workspace: str) -> str:
         base_sha=base_sha,
     )
 
-    # ---- Phase 5: LLM explanations (GATED) ----
-    for impact in impacts:
-        # if impact["label"] not in {"MEDIUM", "HIGH"}:
-        #     impact["explanation"] = None
-        #     continue
-
+    # ---- Phase 5: LLM explanations (PARALLELIZED) ----
+    def process_impact(impact):
+        # Optional: Add gate logic here (e.g. only explain Medium/High)
         explanation = explain_impact(
             changed_symbol=impact["symbol"],
             before_code=impact["before_code"],
@@ -132,6 +136,15 @@ def clone_and_analyze_pr(repo: str, pr_number: int, workspace: str) -> str:
             call_site_code=impact["call_site_code"],
         )
         impact["explanation"] = explanation
+        return impact
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(process_impact, impact): impact for impact in impacts}
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                logger.error(f"LLM generation failed: {e}")
 
     # ---- Rendering ----
     summary = summarize_diff(diff)
@@ -151,4 +164,6 @@ def clone_and_analyze_pr(repo: str, pr_number: int, workspace: str) -> str:
             if r.get("explanation"):
                 summary += f"  ↳ {r['explanation']}\n"
 
+    cache_set(summary_cache_key, summary, ttl=3600)
+    
     return summary
