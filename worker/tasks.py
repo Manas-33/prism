@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import logging
 import uuid 
 from app.workspace import job_workspace
-from app.git_ops import clone_and_analyze_pr
+from app.pipeline import clone_and_analyze_pr
 load_dotenv()
 logger = logging.getLogger(__name__)
 
