@@ -96,12 +96,6 @@ Protects both the webhook ingestion and LLM inference layers from abuse and cost
 - **Webhook throttling** via [SlowAPI](https://github.com/laurentS/slowapi) — configurable per-IP and per-repo rate limits on the `/webhook/github` endpoint to prevent denial-of-wallet attacks
 - **LLM call budgeting** — per-PR token budget with a max concurrent requests cap, preventing a single massive PR from exhausting the Gemini API quota and starving other reviews
 
-### 📊 Evaluation Pipeline
-Built-in precision/recall evaluation framework to continuously measure the accuracy of Prism's impact detection against ground-truth annotations:
-- **Precision** — What percentage of flagged impacts are true positives? Ensures reviews aren't noisy
-- **Recall** — What percentage of real downstream impacts are caught? Ensures nothing slips through
-- Configurable test harness that runs against annotated PRs, producing per-run metrics to track detection quality as the analysis engine evolves
-
 ### 📈 Engineering Dashboard
 Real-time frontend dashboard backed by PostgreSQL for engineering teams to track code health metrics over time:
 - **Impact Hotspot Map** — Identifies modules and symbols with the highest downstream fragility, surfacing architectural risk before it becomes tech debt
@@ -200,18 +194,6 @@ Open a PR on any repo with the app installed — Prism takes it from there.
 | **Auth** | PyJWT + RSA | Secure GitHub App JWT authentication |
 | **Packaging** | uv | 10-100x faster than pip, with lockfile support |
 | **Deployment** | Docker Compose | Single-command reproducible stack |
-
----
-
-## Evaluation
-
-PRism ships a precision/recall harness that measures impact-detection quality against annotated, hand-verified fixtures — **graph-only**, so no GitHub/Redis/LLM secrets are needed:
-
-```bash
-uv run python -m eval
-```
-
-Current baseline: **precision 1.00, recall 0.75** on the demo fixture set — every miss is an attribute-access dependency the call-graph can't see. See [`eval/README.md`](eval/README.md) for the annotation format, adding cases, and CI wiring (`.github/workflows/eval.yml`).
 
 ---
 
