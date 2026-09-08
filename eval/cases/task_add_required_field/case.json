@@ -1,0 +1,8 @@
+{
+  "name": "task_add_required_field",
+  "description": "Task dataclass gains a required `priority` field (no default). The only place Task is constructed, tasks.py build_tasks(), would break. Files that only use Task as a type hint (services.py, cli.py) are not affected.",
+  "changed_symbols": ["Task"],
+  "expected_impacts": [
+    {"file": "src/demo_app/tasks.py", "symbol": "Task", "kind": "call"}
+  ]
+}

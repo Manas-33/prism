@@ -1,0 +1,8 @@
+{
+  "name": "slugify_signature_change",
+  "description": "slugify() gains a required `separator` parameter. The only caller, formatter.py, calls slugify(config.name) and would break.",
+  "changed_symbols": ["slugify"],
+  "expected_impacts": [
+    {"file": "src/demo_app/formatter.py", "symbol": "slugify", "kind": "call"}
+  ]
+}

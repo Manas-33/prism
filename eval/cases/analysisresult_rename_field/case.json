@@ -1,0 +1,10 @@
+{
+  "name": "analysisresult_rename_field",
+  "description": "AnalysisResult renames its `tag_counts` field to `tag_totals`. services.py and models.py construct AnalysisResult(tag_counts=...) (calls PRism can see) while formatter.py reads result.tag_counts (an attribute access PRism's call-graph cannot see). The formatter.py miss is a genuine recall gap.",
+  "changed_symbols": ["AnalysisResult"],
+  "expected_impacts": [
+    {"file": "src/demo_app/services.py", "symbol": "AnalysisResult", "kind": "call"},
+    {"file": "src/demo_app/models.py", "symbol": "AnalysisResult", "kind": "call"},
+    {"file": "src/demo_app/formatter.py", "symbol": "AnalysisResult", "kind": "attribute-access"}
+  ]
+}

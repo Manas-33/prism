@@ -252,10 +252,13 @@ def find_impacts_with_confidence_and_context(
     return impacts
 
 def git_show_file(repo_dir:str, commit_sha:str, file_path:str) -> str:
+    # check=False: a symbol's defining file may not exist at the base SHA
+    # (e.g. a newly added file). Treat "not in base" as empty before-code
+    # rather than crashing the whole analysis.
     result = subprocess.run(
         ["git", "show", f"{commit_sha}:{file_path}"],
         cwd=repo_dir,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )

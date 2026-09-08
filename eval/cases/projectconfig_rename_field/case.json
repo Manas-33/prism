@@ -1,0 +1,9 @@
+{
+  "name": "projectconfig_rename_field",
+  "description": "ProjectConfig renames its `risk_weights` field to `weights`. utils.py constructs ProjectConfig(risk_weights=...) (a call PRism can see) AND services.py reads self._config.risk_weights (an attribute access PRism's call-graph cannot see). The services.py miss is a genuine recall gap.",
+  "changed_symbols": ["ProjectConfig"],
+  "expected_impacts": [
+    {"file": "src/demo_app/utils.py", "symbol": "ProjectConfig", "kind": "call"},
+    {"file": "src/demo_app/services.py", "symbol": "ProjectConfig", "kind": "attribute-access"}
+  ]
+}
