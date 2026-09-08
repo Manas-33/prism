@@ -63,6 +63,7 @@ def analyze_refs(
     local_path: str | None = None,
     explain: bool = False,
     use_cache: bool = False,
+    rules_file: str | None = None,
 ) -> AnalysisResult:
     """Offline path: (repo, base_sha, head_sha) -> structured impacts.
 
@@ -73,5 +74,6 @@ def analyze_refs(
         workspace, repo, base_sha, head_sha, local_path=local_path
     )
     return analyze_impacts(
-        repo_dir, repo, base_sha, head_sha, explain=explain, use_cache=use_cache
+        repo_dir, repo, base_sha, head_sha,
+        explain=explain, use_cache=use_cache, rules_file=rules_file,
     )

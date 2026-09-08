@@ -30,6 +30,7 @@ from app.dependency_graph import (
 )
 from app.repo_index import build_repo_index
 from app.llm_service import explain_impact
+from app.rules import get_rules
 from app.cache import cache_get, cache_set
 from app.models import (
     serialize_repo_index,
@@ -129,8 +130,14 @@ def _detect_changed_symbols(repo_dir: str, changed_by_file, base_sha):
     return triples
 
 
-def _explain_impacts(impacts: List[dict]) -> None:
-    """Attach an LLM explanation to each impact, in parallel. Mutates in place."""
+def _explain_impacts(impacts: List[dict], rules: List[str] | None = None) -> None:
+    """Attach an LLM explanation to each impact, in parallel. Mutates in place.
+
+    `rules` (the run's engineering rules) is forwarded unchanged into every
+    explanation; when it is empty/None the prompt is identical to rule-free
+    behaviour. Stage B will move rule resolution per-impact (inside
+    process_impact) so each impact retrieves rules scoped to its own code.
+    """
     def process_impact(impact):
         impact["explanation"] = explain_impact(
             changed_symbol=impact["symbol"],
@@ -138,6 +145,7 @@ def _explain_impacts(impacts: List[dict]) -> None:
             after_code=impact["after_code"],
             impacted_file=impact["file"],
             call_site_code=impact["call_site_code"],
+            rules=rules,
         )
         return impact
 
@@ -158,6 +166,7 @@ def analyze_impacts(
     *,
     explain: bool = True,
     use_cache: bool = True,
+    rules_file: str | None = None,
 ) -> AnalysisResult:
     """
     Analyze the change base_sha -> head_sha for a repo already on disk.
@@ -167,6 +176,9 @@ def analyze_impacts(
     explain  : run the LLM impact explanations (needs GEMINI_API_KEY). Off for
                graph-only runs like precision/recall eval.
     use_cache: use the Redis graph cache. Off for offline runs with no Redis.
+    rules_file: optional override path for the engineering rules to enforce;
+               otherwise rules are discovered from the repo (see app.rules).
+               Only consulted when explain=True.
     """
     # ---- Diff ----
     diff = compute_diff(repo_dir, base_sha)
@@ -199,7 +211,11 @@ def analyze_impacts(
 
     # ---- LLM explanations (optional) ----
     if explain:
-        _explain_impacts(impacts)
+        # Resolve the run's engineering rules once (Stage A). Rules only affect
+        # the LLM prompt, so graph-only/eval runs (explain=False) are untouched
+        # — which is why this cannot move the precision/recall numbers.
+        rules = get_rules(repo, repo_dir, rules_file=rules_file)
+        _explain_impacts(impacts, rules)
 
     return AnalysisResult(
         repo=repo,

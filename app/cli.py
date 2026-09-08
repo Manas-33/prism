@@ -38,6 +38,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Generate LLM explanations per impact (requires GEMINI_API_KEY).",
     )
     parser.add_argument(
+        "--rules-file", metavar="PATH", default=None,
+        help="Override the engineering-rules source (a markdown rules doc). "
+             "Only used with --explain; otherwise rules are auto-discovered "
+             "from the repo (.prism/rules.md or STYLEGUIDE.md).",
+    )
+    parser.add_argument(
         "--cache", action="store_true",
         help="Use the Redis graph cache (off by default for offline runs).",
     )
@@ -72,6 +78,7 @@ def main(argv=None) -> int:
             local_path=args.local,
             explain=args.explain,
             use_cache=args.cache,
+            rules_file=args.rules_file,
         )
 
     if args.format in ("summary", "both"):
