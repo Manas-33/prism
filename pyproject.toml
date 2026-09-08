@@ -1,7 +1,7 @@
 [project]
 name = "prism"
 version = "0.1.0"
-description = "Add your description here"
+description = "Blast-radius PR review: catches what your change breaks downstream and enforces your team's engineering rules, not just the diff."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
