@@ -31,6 +31,7 @@ from app.dependency_graph import (
 from app.repo_index import build_repo_index
 from app.llm_service import explain_impact
 from app.rules import get_rules
+from app.rag import ensure_ingested
 from app.cache import cache_get, cache_set
 from app.models import (
     serialize_repo_index,
@@ -42,6 +43,20 @@ from app.models import (
 logger = logging.getLogger(__name__)
 
 LLM_MAX_WORKERS = 5
+RETRIEVAL_K = 5
+
+
+def _impact_query_text(impact: dict) -> str:
+    """Build the Stage B retrieval query for one impact from its changed
+    symbol, before/after bodies, and call site — so retrieval pulls the rules
+    relevant to *this* change (e.g. a try/except diff pulls error-handling rules)."""
+    parts = [
+        impact.get("symbol", ""),
+        impact.get("before_code", ""),
+        impact.get("after_code", ""),
+        impact.get("call_site_code", ""),
+    ]
+    return "\n".join(p for p in parts if p)
 
 
 @dataclass
@@ -130,15 +145,44 @@ def _detect_changed_symbols(repo_dir: str, changed_by_file, base_sha):
     return triples
 
 
-def _explain_impacts(impacts: List[dict], rules: List[str] | None = None) -> None:
+def _resolve_rules_cached(impact, repo, repo_dir, head_sha, use_cache, rules_file):
+    """Resolve one impact's rules, cached per (repo, head_sha, symbol) in Redis.
+
+    The head SHA pins the code, so a symbol's retrieval result is stable for that
+    SHA — caching it avoids re-embedding + re-querying Qdrant when the same PR
+    head is re-analyzed. Skipped entirely when use_cache is False (offline runs
+    with no Redis). Mirrors the graph cache's key/TTL pattern.
+    """
+    cache_key = f"rules:{repo}:{head_sha}:{impact['symbol']}"
+    if use_cache:
+        cached = cache_get(cache_key)
+        if cached is not None:
+            logger.info("Rules cache hit for %s", impact["symbol"])
+            return cached
+    rules = get_rules(
+        repo, repo_dir,
+        rules_file=rules_file,
+        query_text=_impact_query_text(impact),
+        k=RETRIEVAL_K,
+    )
+    if use_cache:
+        cache_set(cache_key, rules)
+    return rules
+
+
+def _explain_impacts(impacts: List[dict], *, repo: str, repo_dir: str, head_sha: str,
+                     use_cache: bool, rules_file: str | None = None) -> None:
     """Attach an LLM explanation to each impact, in parallel. Mutates in place.
 
-    `rules` (the run's engineering rules) is forwarded unchanged into every
-    explanation; when it is empty/None the prompt is identical to rule-free
-    behaviour. Stage B will move rule resolution per-impact (inside
-    process_impact) so each impact retrieves rules scoped to its own code.
+    Each impact resolves its OWN rules (Stage B): get_rules embeds the impact's
+    changed code + call site and retrieves the rules scoped to that repo and
+    relevant to that change (cached per symbol by head SHA). When Qdrant is
+    empty/unreachable this degrades to the repo's static/built-in rules, and an
+    empty result leaves the prompt rule-free — so the path is safe with or
+    without a vector store.
     """
     def process_impact(impact):
+        rules = _resolve_rules_cached(impact, repo, repo_dir, head_sha, use_cache, rules_file)
         impact["explanation"] = explain_impact(
             changed_symbol=impact["symbol"],
             before_code=impact["before_code"],
@@ -211,11 +255,15 @@ def analyze_impacts(
 
     # ---- LLM explanations (optional) ----
     if explain:
-        # Resolve the run's engineering rules once (Stage A). Rules only affect
-        # the LLM prompt, so graph-only/eval runs (explain=False) are untouched
-        # — which is why this cannot move the precision/recall numbers.
-        rules = get_rules(repo, repo_dir, rules_file=rules_file)
-        _explain_impacts(impacts, rules)
+        # Stage B: index this repo's rules once (idempotent, best-effort), then
+        # each impact retrieves the rules scoped to its own changed code. Rules
+        # only affect the LLM prompt, so graph-only/eval runs (explain=False) are
+        # untouched — which is why this cannot move the precision/recall numbers.
+        ensure_ingested(repo, repo_dir, rules_file=rules_file)
+        _explain_impacts(
+            impacts, repo=repo, repo_dir=repo_dir,
+            head_sha=head_sha, use_cache=use_cache, rules_file=rules_file,
+        )
 
     return AnalysisResult(
         repo=repo,

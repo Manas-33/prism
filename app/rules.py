@@ -19,7 +19,7 @@ See local.md ("What the rules look like") for the shape and rationale.
 import os
 import re
 import logging
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -66,13 +66,28 @@ def parse_rules_markdown(text: str) -> List[str]:
     return rules
 
 
-def _rules_from_file(path: str) -> List[str]:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return parse_rules_markdown(f.read())
-    except OSError as e:
-        logger.warning("Could not read rules file %s: %s", path, e)
-        return []
+def find_rules_source(repo_dir: str, *, rules_file: Optional[str] = None) -> Optional[Tuple[str, str]]:
+    """Return (markdown_text, source_name) for the repo's rules doc, or None.
+
+    Resolution: an explicit `rules_file` override, else `.prism/rules.md`, else
+    `STYLEGUIDE.md`, taking the first that exists. Returns None when there is no
+    rules file — the built-in rules are a fallback and are not sourced from disk
+    (nor ingested into Qdrant). Shared by get_rules (Stage A fallback) and
+    app.rag (ingestion), so both agree on what "the repo's rules" are.
+    """
+    candidates: List[Tuple[str, str]] = []
+    if rules_file:
+        candidates.append((rules_file, os.path.basename(rules_file)))
+    for name in RULES_FILENAMES:
+        candidates.append((os.path.join(repo_dir, name), name))
+    for path, source_name in candidates:
+        if os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return f.read(), source_name
+            except OSError as e:
+                logger.warning("Could not read rules file %s: %s", path, e)
+    return None
 
 
 def get_rules(
@@ -83,35 +98,42 @@ def get_rules(
     query_text: Optional[str] = None,
     k: int = 5,
 ) -> List[str]:
-    """Resolve the engineering rules to enforce for one analysis run.
+    """Resolve the engineering rules to enforce for one impact (or run).
 
-    Resolution order (Stage A):
-      1. An explicit `rules_file` override (e.g. CLI `--rules-file`), if it parses.
-      2. A rules file in the target repo — `.prism/rules.md`, else `STYLEGUIDE.md`.
+    Resolution order:
+      1. Stage B — scoped Qdrant retrieval, when `query_text` is given and the
+         repo has rules indexed. Always repo-scoped (see app.rag).
+      2. Stage A — an explicit `rules_file`, else `.prism/rules.md`, else
+         `STYLEGUIDE.md` in the checkout.
       3. The built-in static list.
       4. `[]` (only if the built-in list is emptied) — callers treat empty as
          "no rules" and fall back to today's prompt.
 
-    repo       : repo identifier (unused in Stage A; the scope key in Stage B).
+    Retrieval failures or an empty index fall through to steps 2-3, so the
+    feature degrades cleanly to Stage A behaviour when Qdrant is unavailable.
+
+    repo       : repo identifier + the Stage B retrieval scope key.
     repo_dir   : local checkout to search for a rules file.
     rules_file : explicit override path, wins over in-repo discovery.
-    query_text : ignored in Stage A; Stage B embeds it to retrieve scoped rules.
-    k          : ignored in Stage A; Stage B's top-k retrieval size.
+    query_text : Stage B — the changed code/call-site text to retrieve against.
+    k          : Stage B — top-k retrieval size.
     """
-    if rules_file:
-        rules = _rules_from_file(rules_file)
-        if rules:
-            logger.info("Loaded %d rule(s) from override %s", len(rules), rules_file)
-            return rules
-        logger.warning("Rules file %s yielded no rules; falling back", rules_file)
+    if query_text:
+        try:
+            from app.rag import retrieve_rules
+            retrieved = retrieve_rules(repo, query_text, k=k)
+            if retrieved:
+                logger.info("Retrieved %d scoped rule(s) for %s", len(retrieved), repo)
+                return retrieved
+        except Exception as e:
+            logger.warning("Rule retrieval unavailable (%s); using static rules", e)
 
-    for candidate in RULES_FILENAMES:
-        path = os.path.join(repo_dir, candidate)
-        if os.path.isfile(path):
-            rules = _rules_from_file(path)
-            if rules:
-                logger.info("Loaded %d rule(s) from %s", len(rules), candidate)
-                return rules
+    source = find_rules_source(repo_dir, rules_file=rules_file)
+    if source:
+        rules = parse_rules_markdown(source[0])
+        if rules:
+            logger.info("Loaded %d rule(s) from %s", len(rules), source[1])
+            return rules
 
     logger.info("No rules file for %s; using %d built-in rule(s)", repo, len(_BUILTIN_RULES))
     return list(_BUILTIN_RULES)
