@@ -1,5 +1,7 @@
 from tree_sitter_languages import get_language, get_parser
 import os
+import ast
+import textwrap
 
 PY_LANGUAGE = get_language("python")
 parser = get_parser("python")
@@ -206,6 +208,45 @@ def changed_lines_from_diff(diff: str):
 
     return changed
 
+def changed_lines_by_file(diff: str) -> dict:
+    """Map each changed file -> set of its changed (new-file) line numbers.
+
+    Unlike changed_lines_from_diff, this keeps line numbers scoped to the file
+    they belong to. Conflating them across files causes false "changed symbols"
+    (a hunk in file A marking a same-line-range symbol in file B).
+    """
+    result: dict = {}
+    current_file = None
+    lineno = None
+
+    for line in diff.splitlines():
+        if line.startswith("diff --git"):
+            current_file, lineno = None, None
+        elif line.startswith("+++ b/"):
+            current_file = line[6:]
+            result.setdefault(current_file, set())
+            lineno = None
+        elif line.startswith("+++ "):        # e.g. "+++ /dev/null" (deleted file)
+            current_file, lineno = None, None
+        elif line.startswith("@@"):
+            if current_file is None:
+                continue
+            try:
+                # @@ -a,b +c,d @@  -> new-file hunk starts at c
+                lineno = int(line.split("+", 1)[1].split()[0].split(",")[0])
+            except (IndexError, ValueError):
+                lineno = None
+        elif current_file is not None and lineno is not None:
+            if line.startswith("+"):
+                result[current_file].add(lineno)
+                lineno += 1
+            elif line.startswith("-") or line.startswith("\\"):
+                pass                          # removed line / "no newline" marker
+            else:
+                lineno += 1                   # context line
+
+    return result
+
 def find_changed_symbols(symbols, changed_lines):
     changed = []
 
@@ -218,3 +259,101 @@ def find_changed_symbols(symbols, changed_lines):
             changed.append(("class", cls["name"]))
 
     return changed
+
+def _docstring_lines(tree):
+    """Line numbers occupied by docstrings (bare string expression statements)."""
+    lines = set()
+    for node in walk(tree.root_node):
+        if node.type == "expression_statement":
+            for child in node.children:
+                if child.type == "string":
+                    for ln in range(child.start_point[0] + 1, child.end_point[0] + 2):
+                        lines.add(ln)
+    return lines
+
+def filter_code_lines(tree, source: str, changed_lines):
+    """Keep only changed lines that carry real code.
+
+    Drops blank lines, full-line comments, and docstring lines so a change that
+    only touches documentation/comments/formatting doesn't mark a symbol as
+    changed (and spuriously flag all its callers).
+    """
+    src_lines = source.splitlines()
+    docstrings = _docstring_lines(tree)
+    code = set()
+    for ln in changed_lines:
+        if ln < 1 or ln > len(src_lines):
+            continue
+        stripped = src_lines[ln - 1].strip()
+        if stripped == "" or stripped.startswith("#") or ln in docstrings:
+            continue
+        code.add(ln)
+    return code
+
+
+def _symbol_source(source: str, symbols, kind: str, name: str):
+    key = "functions" if kind == "function" else "classes"
+    lines = source.splitlines()
+    for s in symbols[key]:
+        if s["name"] == name:
+            return "\n".join(lines[s["start_line"] - 1:s["end_line"]])
+    return None
+
+
+class _StripNormalizer(ast.NodeTransformer):
+    """Erase docstrings. Comments are already absent from the AST (so a change to
+    a trailing `# type: ignore` is invisible here). Type annotations are kept on
+    purpose: dropping them would hide dataclass field additions, which DO change
+    a constructor's signature."""
+
+    def _strip_doc(self, node):
+        body = getattr(node, "body", None)
+        if (body and isinstance(body[0], ast.Expr)
+                and isinstance(getattr(body[0], "value", None), ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            node.body = body[1:]
+
+    def visit_FunctionDef(self, node):
+        self._strip_doc(node)
+        self.generic_visit(node)
+        return node
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_ClassDef(self, node):
+        self._strip_doc(node)
+        self.generic_visit(node)
+        return node
+
+    def visit_Module(self, node):
+        self._strip_doc(node)
+        self.generic_visit(node)
+        return node
+
+
+def _semantic_signature(src: str):
+    try:
+        tree = ast.parse(textwrap.dedent(src))
+    except (SyntaxError, ValueError, IndentationError, TypeError):
+        return None
+    try:
+        tree = _StripNormalizer().visit(tree)
+        ast.fix_missing_locations(tree)
+        return ast.dump(tree, annotate_fields=False)
+    except Exception:
+        return None
+
+
+def is_substantive_change(base_src, base_symbols, head_src, head_symbols, kind, name) -> bool:
+    """False when a symbol's base and head bodies are identical modulo comments,
+    docstrings, and type annotations — a cosmetic change that can't break callers.
+    Conservative: returns True (substantive) whenever it can't be sure."""
+    head_frag = _symbol_source(head_src, head_symbols, kind, name)
+    base_frag = _symbol_source(base_src, base_symbols, kind, name) if base_src else None
+    if base_frag is None:
+        return True  # new or moved symbol
+    head_sig = _semantic_signature(head_frag)
+    base_sig = _semantic_signature(base_frag)
+    if head_sig is None or base_sig is None:
+        return True  # couldn't normalize -> don't over-filter
+    return head_sig != base_sig

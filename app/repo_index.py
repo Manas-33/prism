@@ -40,14 +40,22 @@ def index_file(repo_dir: str, file_path: str) -> FileIndex:
         symbols=symbols
     )
 
+# Non-library directories: demo/example code reuses common class names
+# (Response, Application, ...) and pollutes the symbol graph with collisions.
+EXCLUDED_DIRS = {
+    "examples", "example", "docs", "doc",
+    ".git", "__pycache__", ".venv", "venv", "env", "build", "dist", ".tox",
+}
+
 def build_repo_index(repo_dir:str) -> Dict[str, FileIndex]:
     index = {}
-    for root, _, files in os.walk(repo_dir):
+    for root, dirs, files in os.walk(repo_dir):
+        dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS]
         for file in files:
             if file.endswith(".py"):
                 rel_path = os.path.relpath(os.path.join(root, file), repo_dir)
                 file_index = index_file(repo_dir, rel_path)
                 if file_index:
                     index[rel_path] = file_index
-                    
+
     return index

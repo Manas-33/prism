@@ -2,7 +2,7 @@ from collections import defaultdict
 from typing import Dict, List, Set
 from app.models import FileIndex
 from app.static_analysis import parse_code, walk, resolve_import
-import os, subprocess
+import os, subprocess, re
 from app.confidence import compute_confidence, confidence_label
 from app.llm_service import explain_impact
 
@@ -91,36 +91,227 @@ def extract_function_calls(tree):
 
     return calls
 
+def _module_stem(path: str) -> str:
+    base = os.path.basename(path)
+    if base == "__init__.py":
+        return os.path.basename(os.path.dirname(path))
+    return base[:-3] if base.endswith(".py") else base
+
+def _reachable_files(fi, all_files, defs_by_name):
+    """Files a caller can reach for name resolution: itself + files it imports.
+
+    An import is resolved two ways (either is enough), which is robust across
+    flat vs src/ layouts and independent of import-statement parsing quirks:
+      - by module stem: `import foo` / `from foo import x` -> a file named foo
+      - by imported symbol: `from x import Bar` -> the file that defines Bar
+
+    Importing anything from a module makes all of that module's symbols
+    reachable (file-level granularity), which is what lets a call resolve to the
+    right definition instead of every same-named symbol in the repo.
+    """
+    tokens = set()
+    for imp in fi.imports:
+        module = imp.get("module")
+        if module:
+            tokens.add(module.split(".")[-1])
+
+    reachable = {fi.path}
+    for f in all_files:
+        if _module_stem(f) in tokens:
+            reachable.add(f)
+    for tok in tokens:
+        reachable.update(defs_by_name.get(tok, {}).keys())
+    return reachable
+
+SIMPLE_NAME = re.compile(r"[A-Za-z_]\w*")
+
+
+def is_dunder(name: str) -> bool:
+    return len(name) > 4 and name.startswith("__") and name.endswith("__")
+
+
+def _type_tokens(type_node):
+    """Bare identifiers in a type annotation (e.g. `Optional[HTTPAdapter]` -> {Optional, HTTPAdapter})."""
+    toks = set()
+    for n in walk(type_node):
+        if n.type in ("identifier", "dotted_name"):
+            toks.add(n.text.decode().split(".")[-1])
+    return toks
+
+
+def _collect_var_types(tree):
+    """name -> {annotated type identifiers} from params (`x: T`) and annotated assignments."""
+    var_types = defaultdict(set)
+    for node in walk(tree.root_node):
+        if node.type in ("typed_parameter", "typed_default_parameter"):
+            type_node = node.child_by_field_name("type")
+            name_node = node.child_by_field_name("name")
+            if name_node is None:
+                name_node = next((c for c in node.children if c.type == "identifier"), None)
+            if name_node is not None and type_node is not None:
+                var_types[name_node.text.decode()].update(_type_tokens(type_node))
+        elif node.type == "assignment":
+            type_node = node.child_by_field_name("type")
+            left = node.child_by_field_name("left")
+            if type_node is not None and left is not None and left.type == "identifier":
+                var_types[left.text.decode()].update(_type_tokens(type_node))
+    return var_types
+
+
+def _resolve_call_targets(text, fi_path, reachable, defs_by_name, var_types, external_names=frozenset()):
+    """Resolve a call expression to (symbol_id, precise) pairs, using the call's
+    receiver instead of matching the bare method name everywhere.
+
+    `precise` is True when we resolved to a single, determinate target (self, a
+    typed/class/module receiver, or a uniquely-named bare call). It is False for
+    the untyped import-scoped fallback or any ambiguous multi-owner match — those
+    are the "shaky" edges that get their confidence down-weighted so they don't
+    surface as High.
+    """
+    if "." in text:
+        receiver_expr, method = text.rsplit(".", 1)
+    else:
+        receiver_expr, method = None, text
+
+    # Dunders are invoked implicitly (construction, `with`, `len()`); the real
+    # dependency is the class, already tracked via the class symbol.
+    if is_dunder(method):
+        return []
+
+    candidates = defs_by_name.get(method)
+    if not candidates:
+        return []
+
+    def tag(targets, resolved_precisely):
+        # A resolution is only trustworthy when a precise rule pinned a *single*
+        # owner; multiple owners means we're guessing among them.
+        precise = resolved_precisely and len(targets) == 1
+        return [(sid, precise) for sid in targets]
+
+    if receiver_expr is None:
+        # A bare name imported from a non-repo module (e.g. stdlib `Path`) shadows
+        # any same-named repo symbol — don't attribute it to the repo symbol.
+        if method in external_names:
+            return []
+        # otherwise -> a module-level function/class in a reachable file
+        return tag([sid for f, sid in candidates.items() if f in reachable], True)
+
+    if receiver_expr == "self":
+        # `self.m()` -> a method defined in the caller's own file
+        sid = candidates.get(fi_path)
+        return [(sid, True)] if sid else []
+
+    if receiver_expr.startswith("super("):
+        return []  # parent-class call; needs inheritance resolution -> skip rather than guess
+
+    if SIMPLE_NAME.fullmatch(receiver_expr):
+        target_files = set()
+        for typ in var_types.get(receiver_expr, ()):           # `x: SomeType` -> SomeType's file
+            target_files.update(defs_by_name.get(typ, {}).keys())
+        if receiver_expr in defs_by_name:                      # `ClassName.m()` / `Enum.X`
+            target_files.update(defs_by_name[receiver_expr].keys())
+        for f in reachable:                                    # `module.m()` for an imported module
+            if _module_stem(f) == receiver_expr:
+                target_files.add(f)
+        if target_files:
+            return tag([sid for f, sid in candidates.items() if f in target_files], True)
+
+    # Complex/unresolved receiver (e.g. `a.b().c`, or an untyped local): fall
+    # back to the import-scoped name match — the honest residual that would need
+    # full type inference to nail down. Marked shaky (not precise).
+    return tag([sid for f, sid in candidates.items() if f in reachable], False)
+
+
+def _import_bindings(tree):
+    """(local_name, source_module_stem) for names imported into a file.
+
+    e.g. `from pathlib import Path` -> ("Path", "pathlib");
+         `from .adapters import HTTPAdapter` -> ("HTTPAdapter", "adapters").
+    """
+    out = []
+    for node in walk(tree.root_node):
+        if node.type == "import_statement":
+            for child in node.children:
+                if child.type == "dotted_name":
+                    top = child.text.decode().split(".")[0]
+                    out.append((top, top))
+                elif child.type == "aliased_import":
+                    dn = child.child_by_field_name("name")
+                    al = child.child_by_field_name("alias")
+                    if dn is not None and al is not None:
+                        out.append((al.text.decode(), dn.text.decode().split(".")[-1]))
+        elif node.type == "import_from_statement":
+            mod = node.child_by_field_name("module_name")
+            stem = None
+            if mod is not None:
+                txt = mod.text.decode().lstrip(".")
+                if txt:
+                    stem = txt.split(".")[-1]
+            for n in node.children_by_field_name("name"):
+                if n.type == "dotted_name":
+                    local = n.text.decode().split(".")[-1]
+                    out.append((local, stem or local))
+                elif n.type == "aliased_import":
+                    dn = n.child_by_field_name("name")
+                    al = n.child_by_field_name("alias")
+                    if dn is not None and al is not None:
+                        out.append((al.text.decode(), stem or dn.text.decode().split(".")[-1]))
+    return out
+
+
+def _external_names(tree, repo_stems):
+    """Names a file imports from modules that are NOT part of this repo.
+
+    Such a name (e.g. stdlib `Path`) shadows any same-named repo symbol, so a
+    bare call to it must not be attributed to the repo symbol.
+    """
+    ext = set()
+    try:
+        for local, stem in _import_bindings(tree):
+            if stem not in repo_stems:
+                ext.add(local)
+    except Exception:
+        return set()  # never let import-parsing quirks break the graph
+    return ext
+
+
 def build_symbol_graph(repo_dir, repo_index):
     symbol_graph = defaultdict(lambda: defaultdict(lambda: {
         "count": 0,
         "lines": [],
+        "precise": False,
     }))
 
-    symbol_lookup = {}
+    # name -> {defining_file: symbol_id}   (keep every definition, don't collapse)
+    defs_by_name = defaultdict(dict)
     for fi in repo_index.values():
         for sym in fi.symbols:
-            symbol_lookup[sym.name] = symbol_id(sym)
+            defs_by_name[sym.name][fi.path] = symbol_id(sym)
+
+    all_files = list(repo_index.keys())
+    repo_stems = {_module_stem(f) for f in all_files}
 
     for fi in repo_index.values():
         abs_path = os.path.join(repo_dir, fi.path)
         if not os.path.exists(abs_path):
             continue
 
+        reachable = _reachable_files(fi, all_files, defs_by_name)
+
         code = open(abs_path, "r", encoding="utf-8").read()
         tree = parse_code(code)
-        calls = extract_function_calls(tree)
+        var_types = _collect_var_types(tree)
+        external = _external_names(tree, repo_stems)
 
-        for call in calls:
-            name = call["name"].split(".")[-1]
-            if name not in symbol_lookup:
-                continue
-
-            sid = symbol_lookup[name]
-            entry = symbol_graph[fi.path][sid]
-
-            entry["count"] += 1
-            entry["lines"].append(call["line"])
+        for call in extract_function_calls(tree):
+            for sid, precise in _resolve_call_targets(
+                call["name"], fi.path, reachable, defs_by_name, var_types, external
+            ):
+                entry = symbol_graph[fi.path][sid]
+                entry["count"] += 1
+                entry["lines"].append(call["line"])
+                if precise:
+                    entry["precise"] = True
 
     return symbol_graph
 
@@ -179,26 +370,30 @@ def extract_call_site_snippet(path, line_no, window=4):
     return "\n".join(lines[start-1:end])
 
 def find_impacts_with_confidence_and_context(
-    changed_symbols,
+    changed_ids,
     symbol_graph,
     repo_dir,
     repo_index,
     base_sha,
 ):
-    changed_names = {name for _, name in changed_symbols}
+    # changed_ids: set of "file:kind:name" identities of the symbols the PR
+    # changed. Matching on identity (not bare name) is what stops a change to
+    # one `send` from flagging every caller of any `.send()` in the repo.
+    changed_ids = set(changed_ids)
     impacts = []
 
     for file_path, callees in symbol_graph.items():
         for sid, meta in callees.items():
-            _, _, name = sid.split(":")
-
-            if name not in changed_names:
+            if sid not in changed_ids:
                 continue
+
+            def_file, kind, name = sid.rsplit(":", 2)
 
             count = meta["count"]
             lines = meta["lines"]
+            precise = meta.get("precise", True)
 
-            score = compute_confidence(file_path, name, count)
+            score = compute_confidence(file_path, name, count, precise=precise)
             label = confidence_label(score)
 
             abs_impacted = os.path.join(repo_dir, file_path)
@@ -210,31 +405,18 @@ def find_impacts_with_confidence_and_context(
                 CALL_SNIPPET_WINDOW,
             )
 
+            # before/after come from the exact defining file/symbol (via the id).
             after_code = ""
             before_code = ""
-
-            for fi_path, fi in repo_index.items():
+            fi = repo_index.get(def_file)
+            if fi:
                 for sym in fi.symbols:
-                    if sym.name == name:
-                        abs_def_path = os.path.join(repo_dir, fi_path)
-                        after_code = extract_code_snippet(
-                            abs_def_path,
-                            sym.start,
-                            sym.end,
-                        )
-                        base_text = git_show_file(
-                            repo_dir,
-                            base_sha,
-                            fi_path,
-                        )
-                        before_code = extract_code_snippet_from_text(
-                            base_text,
-                            sym.start,
-                            sym.end,
-                        )
+                    if sym.name == name and sym.kind == kind:
+                        abs_def_path = os.path.join(repo_dir, def_file)
+                        after_code = extract_code_snippet(abs_def_path, sym.start, sym.end)
+                        base_text = git_show_file(repo_dir, base_sha, def_file)
+                        before_code = extract_code_snippet_from_text(base_text, sym.start, sym.end)
                         break
-                if after_code:
-                    break
 
             impacts.append({
                 "file": file_path,
@@ -246,6 +428,7 @@ def find_impacts_with_confidence_and_context(
                 "before_code": before_code,
                 "score": score,
                 "label": label,
+                "precise": precise,
             })
 
     impacts.sort(key=lambda x: x["score"], reverse=True)

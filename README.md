@@ -203,6 +203,18 @@ Open a PR on any repo with the app installed — Prism takes it from there.
 
 ---
 
+## Evaluation
+
+PRism ships a precision/recall harness that measures impact-detection quality against annotated, hand-verified fixtures — **graph-only**, so no GitHub/Redis/LLM secrets are needed:
+
+```bash
+uv run python -m eval
+```
+
+Current baseline: **precision 1.00, recall 0.75** on the demo fixture set — every miss is an attribute-access dependency the call-graph can't see. See [`eval/README.md`](eval/README.md) for the annotation format, adding cases, and CI wiring (`.github/workflows/eval.yml`).
+
+---
+
 ## Roadmap
 
 - [ ] Inline PR review comments on specific changed lines

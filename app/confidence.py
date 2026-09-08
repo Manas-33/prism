@@ -2,8 +2,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def compute_confidence(file_path: str, symbol_name: str, call_count: int) -> float:
-    logger.info(f"Computing confidence for file_path='{file_path}', symbol_name='{symbol_name}', call_count={call_count}")
+def compute_confidence(file_path: str, symbol_name: str, call_count: int, precise: bool = True) -> float:
+    logger.info(f"Computing confidence for file_path='{file_path}', symbol_name='{symbol_name}', call_count={call_count}, precise={precise}")
     score = 0.5
 
     if call_count > 1:
@@ -20,6 +20,13 @@ def compute_confidence(file_path: str, symbol_name: str, call_count: int) -> flo
     if "tests/" in file_path or "test_" in file_path or file_path.startswith("tests"):
         score -= 0.3
         logger.debug("Rule 3 applied: File is a test file (-0.3)")
+
+    if not precise:
+        # Shaky resolution (untyped `x.method()` fallback or ambiguous multi-owner):
+        # a real dependency edge, but we can't be sure it's THIS symbol. Keep it out
+        # of the High tier so a "review the High ones" policy stays clean.
+        score -= 0.25
+        logger.debug("Rule 4 applied: Shaky/ambiguous resolution (-0.25)")
 
     score = max(0.0, min(1.0, score))
     logger.info(f"Final computed score: {score}")

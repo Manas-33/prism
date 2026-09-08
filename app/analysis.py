@@ -16,14 +16,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from app.git_ops import compute_diff
 from app.static_analysis import (
     changed_files_from_diff,
-    changed_lines_from_diff,
+    changed_lines_by_file,
     parse_code,
     extract_symbols,
     find_changed_symbols,
+    filter_code_lines,
+    is_substantive_change,
 )
 from app.dependency_graph import (
     build_symbol_graph,
     find_impacts_with_confidence_and_context,
+    git_show_file,
 )
 from app.repo_index import build_repo_index
 from app.llm_service import explain_impact
@@ -88,28 +91,42 @@ def _load_or_build_graph(repo_dir: str, repo: str, head_sha: str, use_cache: boo
     return repo_index, symbol_graph
 
 
-def _detect_changed_symbols(repo_dir: str, changed_files, changed_lines):
-    changed_symbols = []
-    for file in changed_files:
-        if not file.endswith(".py"):
+def _detect_changed_symbols(repo_dir: str, changed_by_file, base_sha):
+    """Return (kind, name, file) triples for symbols whose lines changed.
+
+    Carrying the defining file lets impact matching key on symbol identity
+    (file:kind:name) rather than bare name.
+    """
+    triples = []
+    for file, lines in changed_by_file.items():
+        if not file.endswith(".py") or not lines:
             continue
         path = os.path.join(repo_dir, file)
         if not os.path.exists(path):
             continue
 
         with open(path, "r", encoding="utf-8") as f:
-            tree = parse_code(f.read())
-        symbols = extract_symbols(tree)
-        changed_symbols.extend(find_changed_symbols(symbols, changed_lines))
+            head_src = f.read()
+        head_tree = parse_code(head_src)
 
-    # De-duplicate while preserving first-seen order.
-    seen = set()
-    unique = []
-    for cs in changed_symbols:
-        if cs not in seen:
-            seen.add(cs)
-            unique.append(cs)
-    return unique
+        # First pass: drop obviously-cosmetic changed lines (blank/comment/docstring).
+        code_lines = filter_code_lines(head_tree, head_src, lines)
+        if not code_lines:
+            continue
+
+        head_symbols = extract_symbols(head_tree)
+        candidates = find_changed_symbols(head_symbols, code_lines)
+        if not candidates:
+            continue
+
+        # Second pass: drop symbols whose base->head change is only comments,
+        # docstrings, or type annotations (can't break callers).
+        base_src = git_show_file(repo_dir, base_sha, file)
+        base_symbols = extract_symbols(parse_code(base_src)) if base_src else {"functions": [], "classes": []}
+        for kind, name in candidates:
+            if is_substantive_change(base_src, base_symbols, head_src, head_symbols, kind, name):
+                triples.append((kind, name, file))
+    return triples
 
 
 def _explain_impacts(impacts: List[dict]) -> None:
@@ -154,17 +171,26 @@ def analyze_impacts(
     # ---- Diff ----
     diff = compute_diff(repo_dir, base_sha)
     changed_files = changed_files_from_diff(diff)
-    changed_lines = changed_lines_from_diff(diff)
+    changed_by_file = changed_lines_by_file(diff)
 
     # ---- Graph (cached by head SHA) ----
     repo_index, symbol_graph = _load_or_build_graph(repo_dir, repo, head_sha, use_cache)
 
-    # ---- Changed symbols ----
-    changed_symbols = _detect_changed_symbols(repo_dir, changed_files, changed_lines)
+    # ---- Changed symbols (identity = defining file:kind:name) ----
+    changed_triples = _detect_changed_symbols(repo_dir, changed_by_file, base_sha)
+    changed_ids = {f"{file}:{kind}:{name}" for (kind, name, file) in changed_triples}
+
+    # De-duplicated (kind, name) for reporting, preserving first-seen order.
+    seen = set()
+    changed_symbols = []
+    for kind, name, _file in changed_triples:
+        if (kind, name) not in seen:
+            seen.add((kind, name))
+            changed_symbols.append((kind, name))
 
     # ---- Impacts + confidence + context ----
     impacts = find_impacts_with_confidence_and_context(
-        changed_symbols=changed_symbols,
+        changed_ids=changed_ids,
         symbol_graph=symbol_graph,
         repo_dir=repo_dir,
         repo_index=repo_index,
