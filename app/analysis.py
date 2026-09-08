@@ -8,6 +8,7 @@ driven equally by the online worker, a CLI, the eval harness, or a bug-hunt
 runner.
 """
 import os
+import time
 import logging
 from dataclasses import dataclass
 from typing import List, Tuple
@@ -33,6 +34,7 @@ from app.llm_service import explain_impact
 from app.rules import get_rules
 from app.rag import ensure_ingested
 from app.cache import cache_get, cache_set
+from app.metrics import ANALYSIS_DURATION, IMPACTS_DETECTED
 from app.models import (
     serialize_repo_index,
     deserialize_repo_index,
@@ -224,6 +226,8 @@ def analyze_impacts(
                otherwise rules are discovered from the repo (see app.rules).
                Only consulted when explain=True.
     """
+    start = time.perf_counter()
+
     # ---- Diff ----
     diff = compute_diff(repo_dir, base_sha)
     changed_files = changed_files_from_diff(diff)
@@ -265,7 +269,7 @@ def analyze_impacts(
             head_sha=head_sha, use_cache=use_cache, rules_file=rules_file,
         )
 
-    return AnalysisResult(
+    result = AnalysisResult(
         repo=repo,
         base_sha=base_sha,
         head_sha=head_sha,
@@ -274,3 +278,6 @@ def analyze_impacts(
         changed_symbols=changed_symbols,
         impacts=impacts,
     )
+    ANALYSIS_DURATION.observe(time.perf_counter() - start)
+    IMPACTS_DETECTED.observe(len(impacts))
+    return result

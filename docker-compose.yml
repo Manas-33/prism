@@ -19,6 +19,8 @@ services:
   worker:
     build: .
     command: uv run celery -A worker.tasks worker --loglevel=info
+    ports:
+      - "9808:9808"
     volumes:
       - /Users/dalvi/Downloads/Projects/prism.pem:/run/secrets/github_app_key.pem
     env_file:
@@ -29,6 +31,7 @@ services:
     environment:
       - GITHUB_PRIVATE_KEY_PATH=/run/secrets/github_app_key.pem
       - QDRANT_URL=http://qdrant:6333
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prism_metrics
 
   redis:
     image: "redis:7"
@@ -43,5 +46,34 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
 
+  prometheus:
+    image: "prom/prometheus"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - api
+      - worker
+
+  grafana:
+    image: "grafana/grafana"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    depends_on:
+      - prometheus
+
 volumes:
   qdrant_storage:
+  prometheus_data:
+  grafana_data:

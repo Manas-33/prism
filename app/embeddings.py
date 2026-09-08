@@ -15,6 +15,8 @@ from typing import List
 from google import genai
 from google.genai import types
 
+from app.metrics import track_call
+
 logger = logging.getLogger(__name__)
 
 EMBED_MODEL = "gemini-embedding-001"
@@ -29,14 +31,15 @@ def _embed(texts: List[str], task_type: str) -> List[List[float]]:
     # Bind the client to a local so it isn't garbage-collected (which closes its
     # httpx client) mid-request — matches the pattern in app.api_service.
     client = _client()
-    resp = client.models.embed_content(
-        model=EMBED_MODEL,
-        contents=texts,
-        config=types.EmbedContentConfig(
-            task_type=task_type,
-            output_dimensionality=EMBED_DIM,
-        ),
-    )
+    with track_call("embed"):
+        resp = client.models.embed_content(
+            model=EMBED_MODEL,
+            contents=texts,
+            config=types.EmbedContentConfig(
+                task_type=task_type,
+                output_dimensionality=EMBED_DIM,
+            ),
+        )
     return [e.values for e in resp.embeddings]
 
 
