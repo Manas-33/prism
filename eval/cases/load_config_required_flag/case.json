@@ -1,0 +1,8 @@
+{
+  "name": "load_config_required_flag",
+  "description": "load_config() gains a required keyword-only `strict` parameter. Its only caller, cli.py, calls load_config(args.config, default_name=args.name) and would break.",
+  "changed_symbols": ["load_config"],
+  "expected_impacts": [
+    {"file": "src/demo_app/cli.py", "symbol": "load_config", "kind": "call"}
+  ]
+}
