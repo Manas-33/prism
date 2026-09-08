@@ -60,7 +60,13 @@ def _overlay(src_tree: str, dst_repo: str) -> None:
             rel = os.path.relpath(src, src_tree)
             dst = os.path.join(dst_repo, rel)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copy2(src, dst)
+            # Replace with a fresh file (new inode, mtime=now) and DON'T preserve
+            # the source mtime: a same-size content change (e.g. a 10-char symbol
+            # rename) with a preserved/older mtime looks "unchanged" to git's
+            # stat cache on a fresh checkout, so `git add` never re-hashes it.
+            if os.path.exists(dst):
+                os.remove(dst)
+            shutil.copyfile(src, dst)
 
 
 def build_case_repo(case_dir: str, workspace: str) -> Tuple[str, str, str]:
