@@ -57,15 +57,24 @@ do NOT assume this is a bug unless it clearly is"""
             "- only enforce rules explicitly listed — never invent, infer, or "
             "generalize rules that were not provided\n"
             "- judge each rule using only the before/after code and the call site\n"
-            "- cite the rule number when you flag a violation\n"
+            "- cite the rule number when you flag a violation, and QUOTE the exact "
+            "line(s) that violate it\n"
+            "- flag a violation ONLY when it is unambiguous and fully verifiable "
+            "from the code shown; a rule that is merely related to the code's "
+            "topic is NOT violated\n"
+            "- when uncertain whether a rule applies, do not cite it — most "
+            "changes violate no rules, and a wrong citation is worse than a "
+            "missed one\n"
         )
         numbered = "\n".join(f"{i}. {rule}" for i, rule in enumerate(rules, 1))
         user_prompt += (
             "\n\nInternal engineering rules to enforce:\n"
             f"{numbered}\n\n"
             "Check the AFTER code and the call site against these rules. If one "
-            "is violated, say so explicitly and cite the rule number. Do not "
-            "enforce any rule not listed above."
+            "is clearly violated, say so explicitly, cite the rule number, and "
+            "quote the exact violating line. If no rule is clearly violated, do "
+            "not mention the rules at all. Do not enforce any rule not listed "
+            "above."
         )
 
     response = generate(
