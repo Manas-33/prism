@@ -62,7 +62,7 @@ def run() -> int:
         # --- fallback: no rules file -> built-in static list ---
         builtin = get_rules("o/n", empty)
         fails += check("get_rules: falls back to built-in list", builtin == list(_BUILTIN_RULES))
-        fails += check("built-in list is non-empty (5-8 rules)", 5 <= len(_BUILTIN_RULES) <= 8)
+        fails += check("built-in list is the full default ruleset (30-40 rules)", 30 <= len(_BUILTIN_RULES) <= 40)
 
         # --- override: explicit rules_file wins over discovery ---
         override = _write(empty, "custom.md", "- overridden rule\n")

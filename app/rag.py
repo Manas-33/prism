@@ -4,8 +4,9 @@ Scoped rule retrieval over Qdrant (Stage B of the rules -> RAG feature).
 One shared collection (`prism_rules`) holds every repo's rules, partitioned by
 an indexed `repo` payload field created as a *tenant index* so Qdrant co-locates
 each repo's vectors on disk. Isolation is enforced by funnelling every read
-through `retrieve_rules(repo, ...)`, which ALWAYS applies the `repo` filter — a
-repo's query can never surface another repo's rules (see the scoping test).
+through `retrieve_rules(repo, ...)`, which ALWAYS applies a scope filter of
+{repo, BUILTIN_SCOPE} — a repo's query surfaces only its own rules plus PRism's
+default ruleset, never another repo's rules (see the scoping test).
 
 Every Qdrant/embedding call is best-effort: on any failure these functions log a
 warning and return a safe empty/no-op value, so analysis never fails because the
@@ -23,12 +24,15 @@ import logging
 from typing import List, Optional, Tuple
 
 from app.embeddings import embed_documents, embed_query, EMBED_DIM
-from app.rules import find_rules_source, parse_rules_markdown
+from app.rules import builtin_rules_markdown, find_rules_source, parse_rules_markdown
 
 logger = logging.getLogger(__name__)
 
 COLLECTION = "prism_rules"
 SCORE_FLOOR = 0.5  # cosine similarity floor; below this a "match" is noise
+# Reserved scope for PRism's default ruleset (app.rules.DEFAULT_RULES). Cannot
+# collide with a real repo: repo identifiers are "owner/name" and contain "/".
+BUILTIN_SCOPE = "__builtin__"
 # Fixed namespace so a (repo, rule) pair always maps to the same point id —
 # re-ingesting identical rules updates in place instead of duplicating.
 _NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00c04fc964ff")
@@ -43,7 +47,11 @@ def _client():
     if _CLIENT is None:
         from qdrant_client import QdrantClient
         loc = os.getenv("QDRANT_URL", "http://localhost:6333")
-        _CLIENT = QdrantClient(location=":memory:") if loc == ":memory:" else QdrantClient(url=loc, timeout=5)
+        if loc == ":memory:":
+            _CLIENT = QdrantClient(location=":memory:")
+        else:
+            # QDRANT_API_KEY is required by Qdrant Cloud, unset for local Qdrant.
+            _CLIENT = QdrantClient(url=loc, api_key=os.getenv("QDRANT_API_KEY"), timeout=5)
     return _CLIENT
 
 
@@ -69,8 +77,19 @@ def _ensure_collection(client) -> None:
 
 
 def _repo_filter(repo: str):
+    """Exact single-scope filter — used by ingestion (delete/replace, hash
+    lookup), where builtin and repo rules must never be conflated."""
     from qdrant_client import models
     return models.Filter(must=[models.FieldCondition(key="repo", match=models.MatchValue(value=repo))])
+
+
+def _retrieval_filter(repo: str):
+    """Retrieval scope: the repo's own rules plus the builtin defaults, ranked
+    together by relevance. Other repos' rules remain unreachable."""
+    from qdrant_client import models
+    return models.Filter(must=[
+        models.FieldCondition(key="repo", match=models.MatchAny(any=[repo, BUILTIN_SCOPE])),
+    ])
 
 
 def ingest_rules(repo: str, rules_source: str, *, source: str = "rules", source_hash: Optional[str] = None) -> int:
@@ -120,7 +139,7 @@ def retrieve_rules(repo: str, query_text: str, k: int = 5) -> List[str]:
         result = client.query_points(
             COLLECTION,
             query=embed_query(query_text),
-            query_filter=_repo_filter(repo),
+            query_filter=_retrieval_filter(repo),
             limit=k,
             score_threshold=SCORE_FLOOR,
             with_payload=True,
@@ -146,17 +165,35 @@ def _already_indexed(client, repo: str, source_hash: str) -> bool:
     return len(points) > 0
 
 
+def ensure_builtin_ingested() -> None:
+    """Idempotently index PRism's default ruleset under the reserved
+    BUILTIN_SCOPE, so retrieval can rank defaults alongside a repo's own rules
+    (or serve them alone on a repo with no rules file). Content-hash guarded
+    and never raises, same contract as ensure_ingested."""
+    text = builtin_rules_markdown()
+    source_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    try:
+        client = _client()
+        if _already_indexed(client, BUILTIN_SCOPE, source_hash):
+            return
+        ingest_rules(BUILTIN_SCOPE, text, source="builtin", source_hash=source_hash)
+    except Exception as e:
+        logger.warning("Builtin-rules ingest skipped: %s", e)
+
+
 def ensure_ingested(repo: str, repo_dir: str, *, rules_file: Optional[str] = None) -> None:
     """Idempotently index a repo's rules file at analysis time.
 
-    No-op if the repo has no rules file, if that exact content is already
+    Always ensures the builtin defaults are indexed first; then no-ops if the
+    repo has no rules file of its own, if that exact content is already
     indexed, or if Qdrant is unreachable. Never raises — a vector-store outage
     must not fail analysis. This is the "index on first PR" trigger without any
     GitHub-App-install plumbing.
     """
+    ensure_builtin_ingested()
     source = find_rules_source(repo_dir, rules_file=rules_file)
     if source is None:
-        return  # no file -> nothing to ingest (built-in rules are a fallback, not indexed)
+        return  # no file -> the repo relies on the builtin scope alone
     text, source_name = source
     source_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
     try:

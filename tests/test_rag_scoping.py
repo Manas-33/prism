@@ -49,4 +49,11 @@ def run() -> int:
     rag.ingest_rules("orgA/repo", RULES_A)
     fails += check("re-ingest does not duplicate (still 2)", len(rag.retrieve_rules("orgA/repo", "alpha", k=10)) == 2)
 
+    # --- builtin scope: defaults are shared with every repo, never vice versa ---
+    rag.ingest_rules(rag.BUILTIN_SCOPE, "## Defaults\n- builtin epsilon rule\n")
+    res_a2 = rag.retrieve_rules("orgA/repo", "alpha", k=10)
+    fails += check("repo A sees its rules plus builtins", any("epsilon" in r for r in res_a2) and any("for A" in r for r in res_a2))
+    fails += check("repo A still sees no B rules alongside builtins", not any("for B" in r for r in res_a2))
+    fails += check("repo with no own rules gets builtins", rag.retrieve_rules("orgC/none", "alpha", k=10) == ["Defaults: builtin epsilon rule"])
+
     return fails

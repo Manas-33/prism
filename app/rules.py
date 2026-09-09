@@ -26,18 +26,74 @@ logger = logging.getLogger(__name__)
 # Rules-file names looked for at the root of the target repo, in priority order.
 RULES_FILENAMES = (".prism/rules.md", "STYLEGUIDE.md")
 
-# Built-in fallback: generic, locally-checkable Python rules so the feature
-# demos honestly even on a repo with no rules file. Each is one assertion the
+# PRism's default ruleset: generic, locally-checkable Python rules enforced on
+# any repo that has no rules file of its own (a repo's `.prism/rules.md` /
+# STYLEGUIDE.md layers on top — see app.rag). Each rule is one assertion the
 # LLM can verify against the only evidence it has — the before/after function
-# body and the call site — prefixed with a category for context.
-_BUILTIN_RULES: List[str] = [
-    "Error handling: Never swallow exceptions silently — every `except` block must log the error or re-raise it.",
-    "Error handling: Do not signal failure by returning `None` from a public function; raise a typed exception instead.",
-    "API design: Never change a public function's return type or parameter list without updating every call site provided.",
-    "API design: Functions taking more than three parameters must make them keyword-only (add a bare `*`) so call sites stay unambiguous.",
-    "Mutable defaults: Never use a mutable default argument (`[]`, `{}`, `set()`); default to `None` and construct the value inside the body.",
-    "Silent behavior: Do not change a function's observable behavior — return value, exceptions raised, or side effects — without a matching update at its call sites.",
+# body and the call site. The (id, heading, bullet) shape keeps ids stable for
+# the retrieval benchmark (eval/rag_cases.py), which is labeled against this
+# exact corpus.
+DEFAULT_RULES: List[Tuple[str, str, str]] = [
+    # Error handling
+    ("EH1", "Error handling", "Never swallow exceptions silently — every `except` block must log the error or re-raise it."),
+    ("EH2", "Error handling", "Do not signal failure by returning `None` from a public function; raise a typed exception instead."),
+    ("EH3", "Error handling", "Catch specific exception types; a bare `except:` or `except Exception:` is not allowed outside process entry points."),
+    ("EH4", "Error handling", "Never use `assert` to validate arguments or user input at runtime; asserts are stripped under `python -O`."),
+    # API design
+    ("API1", "API design", "Never change a public function's parameter list or return type without updating every call site in the same change."),
+    ("API2", "API design", "Functions taking more than three parameters must make the extras keyword-only (add a bare `*`)."),
+    ("API3", "API design", "Do not rename a public function or parameter without keeping a deprecated alias for one release."),
+    ("API4", "API design", "Public functions must declare explicit parameters; `**kwargs` is not a substitute for a real signature."),
+    # Mutability
+    ("MUT1", "Mutability", "Never use a mutable default argument (`[]`, `{}`, `set()`); default to `None` and construct the value inside the body."),
+    ("MUT2", "Mutability", "Do not mutate objects the caller passed in; build and return a new value instead."),
+    ("MUT3", "Mutability", "Module-level mutable state must not be mutated from request handlers or at import time."),
+    # Logging
+    ("LOG1", "Logging", "Use lazy `%s` formatting in logging calls, never f-strings or `.format()`, so the message is only built when emitted."),
+    ("LOG2", "Logging", "Never log secrets, API tokens, passwords, or full request payloads."),
+    ("LOG3", "Logging", "Degraded or fallback behavior the operator must know about is logged at WARNING or above, not INFO."),
+    # Concurrency
+    ("CON1", "Concurrency", "Never share one database connection or session across threads; acquire one per task from the pool."),
+    ("CON2", "Concurrency", "Check-then-act sequences on shared state must hold a lock across both steps."),
+    ("CON3", "Concurrency", "Never call blocking I/O inside an `async def`; use the async client or hand it to an executor."),
+    # Security
+    ("SEC1", "Security", "Never build SQL by string formatting or concatenation; use parameterized queries."),
+    ("SEC2", "Security", "Never invoke `subprocess` with `shell=True` on anything derived from user input."),
+    ("SEC3", "Security", "Never deserialize untrusted data with `pickle` or evaluate it with `eval`/`exec`."),
+    ("SEC4", "Security", "Compare secrets and signatures with `hmac.compare_digest`, never with `==`."),
+    # Resources
+    ("RES1", "Resources", "Open files, sockets, and connections with a context manager; never rely on garbage collection to close them."),
+    ("RES2", "Resources", "Every outbound network call must set an explicit timeout."),
+    ("RES3", "Resources", "Retries must be bounded and use backoff; never retry in a tight loop."),
+    # Datetime
+    ("DT1", "Datetime", "Always construct timezone-aware datetimes; naive helpers like `datetime.utcnow()` are banned."),
+    ("DT2", "Datetime", "Store and compare timestamps in UTC; convert to local time only at the display edge."),
+    # Performance
+    ("PERF1", "Performance", "Do not build strings with `+=` inside a loop; collect parts and `join` them."),
+    ("PERF2", "Performance", "Do not read a whole file into memory when streaming it line by line suffices."),
+    ("PERF3", "Performance", "Never issue one query per item of a collection (N+1); batch the fetch."),
+    # Style
+    ("STY1", "Style", "Boolean parameters must be passed by keyword at the call site, never positionally."),
+    ("STY2", "Style", "Do not shadow Python builtins (`id`, `type`, `list`, `dict`) with local or parameter names."),
+    ("STY3", "Style", "Compare against `None` with `is` / `is not`, never with `==`."),
 ]
+
+# Flat "Heading: bullet" strings — the shape parse_rules_markdown produces and
+# every consumer (prompt assembly, Qdrant ingestion) expects.
+_BUILTIN_RULES: List[str] = [f"{heading}: {bullet}" for _, heading, bullet in DEFAULT_RULES]
+
+
+def builtin_rules_markdown() -> str:
+    """The default ruleset rendered as a markdown doc, so builtin ingestion
+    goes through the same parse path as a repo's own rules file."""
+    lines: List[str] = []
+    current = None
+    for _, heading, bullet in DEFAULT_RULES:
+        if heading != current:
+            lines.append(f"## {heading}")
+            current = heading
+        lines.append(f"- {bullet}")
+    return "\n".join(lines) + "\n"
 
 _HEADING_RE = re.compile(r"^#{1,6}\s+(.+?)\s*#*$")
 _BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.+?)\s*$")
