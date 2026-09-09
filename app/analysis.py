@@ -7,7 +7,9 @@ nothing about GitHub webhooks, PR numbers, or comment posting, so it can be
 driven equally by the online worker, a CLI, the eval harness, or a bug-hunt
 runner.
 """
+import ast
 import os
+import textwrap
 import time
 import logging
 from dataclasses import dataclass
@@ -48,16 +50,109 @@ LLM_MAX_WORKERS = 5
 RETRIEVAL_K = 5
 
 
+def _parse_snippet(code: str):
+    """Best-effort AST for a code snippet (dedented; may be a method pulled out
+    of a class). Returns None when the fragment doesn't parse — structural
+    facts are then simply skipped."""
+    if not code:
+        return None
+    try:
+        return ast.parse(textwrap.dedent(code))
+    except SyntaxError:
+        return None
+
+
+def _first_def(tree):
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return node
+    return None
+
+
+def _param_names(fn) -> list:
+    a = fn.args
+    return [p.arg for p in (a.posonlyargs + a.args + a.kwonlyargs)]
+
+
+def _calls_by_callee(tree) -> dict:
+    """Map dotted callee name -> set of keyword-argument names used, across
+    every call in the snippet."""
+    out: dict = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        try:
+            name = ast.unparse(node.func)
+        except Exception:
+            continue
+        out.setdefault(name, set()).update(kw.arg for kw in node.keywords if kw.arg)
+    return out
+
+
+def _structural_summary(before: str, after: str, call_site: str) -> List[str]:
+    """Plain-prose facts about *structural* aspects of the change — renames,
+    signature edits, dropped keyword arguments, positional booleans, f-string
+    log messages. Embeddings rank rules by topical similarity, and these
+    violations have no vocabulary in the raw code for a prose rule to match
+    (a missing `timeout=` is an absence; a rename is only visible in the
+    before/after *diff*), so the query states them explicitly."""
+    facts: List[str] = []
+    b_tree, a_tree = _parse_snippet(before), _parse_snippet(after)
+
+    if b_tree is not None and a_tree is not None:
+        b_fn, a_fn = _first_def(b_tree), _first_def(a_tree)
+        if b_fn is not None and a_fn is not None:
+            if b_fn.name != a_fn.name:
+                facts.append(f"function renamed from `{b_fn.name}` to `{a_fn.name}`")
+            b_params, a_params = _param_names(b_fn), _param_names(a_fn)
+            added = [p for p in a_params if p not in b_params]
+            removed = [p for p in b_params if p not in a_params]
+            if added:
+                facts.append("parameter list changed: `%s` added to the function signature" % "`, `".join(added))
+            if removed:
+                facts.append("parameter list changed: `%s` removed from the function signature" % "`, `".join(removed))
+            if a_fn.args.kwarg is not None and b_fn.args.kwarg is None:
+                facts.append("signature now takes `**kwargs` instead of named parameters")
+        # Keyword arguments dropped from a call that exists on both sides
+        # (e.g. `timeout=` no longer passed to a network call).
+        b_calls, a_calls = _calls_by_callee(b_tree), _calls_by_callee(a_tree)
+        for callee, b_kws in b_calls.items():
+            dropped = b_kws - a_calls.get(callee, b_kws)
+            for kw in sorted(dropped):
+                facts.append(f"keyword argument `{kw}=` no longer passed in the call to `{callee}`")
+
+    for tree in (a_tree, _parse_snippet(call_site)):
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if any(isinstance(arg, ast.Constant) and arg.value in (True, False) for arg in node.args):
+                facts.append("a boolean literal is passed as a positional argument in a call")
+            func = node.func
+            if (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
+                    and "log" in func.value.id.lower()
+                    and any(isinstance(arg, ast.JoinedStr) for arg in node.args)):
+                facts.append("a logging call builds its message with an f-string")
+
+    # Deduplicate, preserving order.
+    return list(dict.fromkeys(facts))
+
+
 def _impact_query_text(impact: dict) -> str:
     """Build the Stage B retrieval query for one impact from its changed
     symbol, before/after bodies, and call site — so retrieval pulls the rules
-    relevant to *this* change (e.g. a try/except diff pulls error-handling rules)."""
-    parts = [
-        impact.get("symbol", ""),
-        impact.get("before_code", ""),
-        impact.get("after_code", ""),
-        impact.get("call_site_code", ""),
-    ]
+    relevant to *this* change (e.g. a try/except diff pulls error-handling
+    rules). Appends a structural-change summary so rules about renames,
+    signature edits, and missing arguments are reachable too (raw code carries
+    no embedding signal for those — see _structural_summary)."""
+    before = impact.get("before_code", "")
+    after = impact.get("after_code", "")
+    call_site = impact.get("call_site_code", "")
+    parts = [impact.get("symbol", ""), before, after, call_site]
+    facts = _structural_summary(before, after, call_site)
+    if facts:
+        parts.append("Change summary:\n" + "\n".join(f"- {f}" for f in facts))
     return "\n".join(p for p in parts if p)
 
 
