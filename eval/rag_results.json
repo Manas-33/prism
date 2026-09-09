@@ -1,0 +1,418 @@
+{
+  "n_queries": 30,
+  "corpus_rules": 32,
+  "k": 5,
+  "hit_at": {
+    "1": 0.7,
+    "3": 0.9,
+    "5": 0.9666666666666667
+  },
+  "wilson_95": {
+    "1": [
+      0.5212387898833981,
+      0.8333543735604105
+    ],
+    "3": [
+      0.7437855868473339,
+      0.9654007400402839
+    ],
+    "5": [
+      0.8332924860304112,
+      0.9940915620051425
+    ]
+  },
+  "mrr": 0.7927777777777778,
+  "empty_retrievals": 0,
+  "cases": [
+    {
+      "id": "swallowed-oserror",
+      "gold": [
+        "EH1"
+      ],
+      "rank": 4,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Resources: Open files, sockets, and connections with a context manager; never rely on garbage collection to close them.",
+        "Resources: Retries must be bounded and use backoff; never retry in a tight loop.",
+        "Performance: Do not read a whole file into memory when streaming it line by line suffices."
+      ]
+    },
+    {
+      "id": "return-none-failure",
+      "gold": [
+        "EH2"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Error handling: Do not signal failure by returning `None` from a public function; raise a typed exception instead.",
+        "Error handling: Never swallow exceptions silently \u2014 every `except` block must log the error or re-raise it.",
+        "Error handling: Never use `assert` to validate arguments or user input at runtime; asserts are stripped under `python -O`."
+      ]
+    },
+    {
+      "id": "broad-except",
+      "gold": [
+        "EH3"
+      ],
+      "rank": 3,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Security: Never deserialize untrusted data with `pickle` or evaluate it with `eval`/`exec`.",
+        "Error handling: Never swallow exceptions silently \u2014 every `except` block must log the error or re-raise it.",
+        "Error handling: Catch specific exception types; a bare `except:` or `except Exception:` is not allowed outside process entry points."
+      ]
+    },
+    {
+      "id": "assert-validation",
+      "gold": [
+        "EH4"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Error handling: Never use `assert` to validate arguments or user input at runtime; asserts are stripped under `python -O`.",
+        "Mutability: Do not mutate objects the caller passed in; build and return a new value instead.",
+        "Resources: Retries must be bounded and use backoff; never retry in a tight loop."
+      ]
+    },
+    {
+      "id": "signature-change",
+      "gold": [
+        "API1"
+      ],
+      "rank": 3,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Performance: Do not build strings with `+=` inside a loop; collect parts and `join` them.",
+        "Mutability: Do not mutate objects the caller passed in; build and return a new value instead.",
+        "API design: Never change a public function's parameter list or return type without updating every call site in the same change."
+      ]
+    },
+    {
+      "id": "too-many-positional",
+      "gold": [
+        "API2"
+      ],
+      "rank": 2,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Style: Boolean parameters must be passed by keyword at the call site, never positionally.",
+        "API design: Functions taking more than three parameters must make the extras keyword-only (add a bare `*`).",
+        "Mutability: Do not mutate objects the caller passed in; build and return a new value instead."
+      ]
+    },
+    {
+      "id": "public-rename",
+      "gold": [
+        "API3"
+      ],
+      "rank": 3,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Mutability: Do not mutate objects the caller passed in; build and return a new value instead.",
+        "Performance: Do not build strings with `+=` inside a loop; collect parts and `join` them.",
+        "API design: Do not rename a public function or parameter without keeping a deprecated alias for one release."
+      ]
+    },
+    {
+      "id": "kwargs-signature",
+      "gold": [
+        "API4"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "API design: Public functions must declare explicit parameters; `**kwargs` is not a substitute for a real signature.",
+        "API design: Functions taking more than three parameters must make the extras keyword-only (add a bare `*`).",
+        "API design: Do not rename a public function or parameter without keeping a deprecated alias for one release."
+      ]
+    },
+    {
+      "id": "mutable-default",
+      "gold": [
+        "MUT1"
+      ],
+      "rank": 3,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Performance: Do not build strings with `+=` inside a loop; collect parts and `join` them.",
+        "Mutability: Do not mutate objects the caller passed in; build and return a new value instead.",
+        "Mutability: Never use a mutable default argument (`[]`, `{}`, `set()`); default to `None` and construct the value inside the body."
+      ]
+    },
+    {
+      "id": "mutates-argument",
+      "gold": [
+        "MUT2"
+      ],
+      "rank": 2,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Performance: Do not build strings with `+=` inside a loop; collect parts and `join` them.",
+        "Mutability: Do not mutate objects the caller passed in; build and return a new value instead.",
+        "Performance: Do not read a whole file into memory when streaming it line by line suffices."
+      ]
+    },
+    {
+      "id": "global-mutation",
+      "gold": [
+        "MUT3"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Mutability: Module-level mutable state must not be mutated from request handlers or at import time.",
+        "Logging: Never log secrets, API tokens, passwords, or full request payloads.",
+        "Resources: Every outbound network call must set an explicit timeout."
+      ]
+    },
+    {
+      "id": "fstring-logging",
+      "gold": [
+        "LOG1"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Logging: Use lazy `%s` formatting in logging calls, never f-strings or `.format()`, so the message is only built when emitted.",
+        "Performance: Do not build strings with `+=` inside a loop; collect parts and `join` them.",
+        "Datetime: Always construct timezone-aware datetimes; naive helpers like `datetime.utcnow()` are banned."
+      ]
+    },
+    {
+      "id": "token-logged",
+      "gold": [
+        "LOG2"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Logging: Never log secrets, API tokens, passwords, or full request payloads.",
+        "Security: Compare secrets and signatures with `hmac.compare_digest`, never with `==`.",
+        "Logging: Degraded or fallback behavior the operator must know about is logged at WARNING or above, not INFO."
+      ]
+    },
+    {
+      "id": "fallback-at-info",
+      "gold": [
+        "LOG3"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Logging: Degraded or fallback behavior the operator must know about is logged at WARNING or above, not INFO.",
+        "Performance: Do not build strings with `+=` inside a loop; collect parts and `join` them.",
+        "Resources: Retries must be bounded and use backoff; never retry in a tight loop."
+      ]
+    },
+    {
+      "id": "shared-connection",
+      "gold": [
+        "CON1"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Concurrency: Never share one database connection or session across threads; acquire one per task from the pool.",
+        "Concurrency: Never call blocking I/O inside an `async def`; use the async client or hand it to an executor.",
+        "Concurrency: Check-then-act sequences on shared state must hold a lock across both steps."
+      ]
+    },
+    {
+      "id": "check-then-act",
+      "gold": [
+        "CON2"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Concurrency: Check-then-act sequences on shared state must hold a lock across both steps.",
+        "Mutability: Do not mutate objects the caller passed in; build and return a new value instead.",
+        "Performance: Do not build strings with `+=` inside a loop; collect parts and `join` them."
+      ]
+    },
+    {
+      "id": "blocking-in-async",
+      "gold": [
+        "CON3"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Concurrency: Never call blocking I/O inside an `async def`; use the async client or hand it to an executor.",
+        "Resources: Retries must be bounded and use backoff; never retry in a tight loop.",
+        "Performance: Do not build strings with `+=` inside a loop; collect parts and `join` them."
+      ]
+    },
+    {
+      "id": "sql-fstring",
+      "gold": [
+        "SEC1"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Security: Never build SQL by string formatting or concatenation; use parameterized queries.",
+        "Performance: Do not build strings with `+=` inside a loop; collect parts and `join` them.",
+        "Performance: Never issue one query per item of a collection (N+1); batch the fetch."
+      ]
+    },
+    {
+      "id": "shell-true",
+      "gold": [
+        "SEC2"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Security: Never invoke `subprocess` with `shell=True` on anything derived from user input.",
+        "Performance: Do not build strings with `+=` inside a loop; collect parts and `join` them.",
+        "Performance: Do not read a whole file into memory when streaming it line by line suffices."
+      ]
+    },
+    {
+      "id": "pickle-untrusted",
+      "gold": [
+        "SEC3"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Security: Never deserialize untrusted data with `pickle` or evaluate it with `eval`/`exec`.",
+        "Mutability: Module-level mutable state must not be mutated from request handlers or at import time.",
+        "Logging: Never log secrets, API tokens, passwords, or full request payloads."
+      ]
+    },
+    {
+      "id": "secret-equality",
+      "gold": [
+        "SEC4"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Security: Compare secrets and signatures with `hmac.compare_digest`, never with `==`.",
+        "Style: Compare against `None` with `is` / `is not`, never with `==`.",
+        "Logging: Never log secrets, API tokens, passwords, or full request payloads."
+      ]
+    },
+    {
+      "id": "unclosed-file",
+      "gold": [
+        "RES1"
+      ],
+      "rank": 5,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Performance: Do not build strings with `+=` inside a loop; collect parts and `join` them.",
+        "Performance: Do not read a whole file into memory when streaming it line by line suffices.",
+        "Error handling: Never swallow exceptions silently \u2014 every `except` block must log the error or re-raise it."
+      ]
+    },
+    {
+      "id": "no-timeout",
+      "gold": [
+        "RES2"
+      ],
+      "rank": null,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Concurrency: Never call blocking I/O inside an `async def`; use the async client or hand it to an executor.",
+        "Mutability: Module-level mutable state must not be mutated from request handlers or at import time.",
+        "API design: Public functions must declare explicit parameters; `**kwargs` is not a substitute for a real signature."
+      ]
+    },
+    {
+      "id": "tight-retry",
+      "gold": [
+        "RES3"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Resources: Retries must be bounded and use backoff; never retry in a tight loop.",
+        "Concurrency: Never call blocking I/O inside an `async def`; use the async client or hand it to an executor.",
+        "Resources: Every outbound network call must set an explicit timeout."
+      ]
+    },
+    {
+      "id": "naive-utcnow",
+      "gold": [
+        "DT1"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Datetime: Always construct timezone-aware datetimes; naive helpers like `datetime.utcnow()` are banned.",
+        "Datetime: Store and compare timestamps in UTC; convert to local time only at the display edge.",
+        "Mutability: Module-level mutable state must not be mutated from request handlers or at import time."
+      ]
+    },
+    {
+      "id": "local-time-storage",
+      "gold": [
+        "DT2"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Datetime: Store and compare timestamps in UTC; convert to local time only at the display edge.",
+        "Datetime: Always construct timezone-aware datetimes; naive helpers like `datetime.utcnow()` are banned.",
+        "Concurrency: Never call blocking I/O inside an `async def`; use the async client or hand it to an executor."
+      ]
+    },
+    {
+      "id": "string-concat-loop",
+      "gold": [
+        "PERF1"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Performance: Do not build strings with `+=` inside a loop; collect parts and `join` them.",
+        "Performance: Do not read a whole file into memory when streaming it line by line suffices.",
+        "Mutability: Do not mutate objects the caller passed in; build and return a new value instead."
+      ]
+    },
+    {
+      "id": "slurp-file",
+      "gold": [
+        "PERF2"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Performance: Do not read a whole file into memory when streaming it line by line suffices.",
+        "Error handling: Never swallow exceptions silently \u2014 every `except` block must log the error or re-raise it.",
+        "Performance: Do not build strings with `+=` inside a loop; collect parts and `join` them."
+      ]
+    },
+    {
+      "id": "n-plus-one",
+      "gold": [
+        "PERF3"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Performance: Never issue one query per item of a collection (N+1); batch the fetch.",
+        "Performance: Do not build strings with `+=` inside a loop; collect parts and `join` them.",
+        "Concurrency: Never call blocking I/O inside an `async def`; use the async client or hand it to an executor."
+      ]
+    },
+    {
+      "id": "positional-bool",
+      "gold": [
+        "STY1"
+      ],
+      "rank": 1,
+      "n_retrieved": 5,
+      "retrieved_top3": [
+        "Style: Boolean parameters must be passed by keyword at the call site, never positionally.",
+        "API design: Functions taking more than three parameters must make the extras keyword-only (add a bare `*`).",
+        "Performance: Do not build strings with `+=` inside a loop; collect parts and `join` them."
+      ]
+    }
+  ]
+}
